@@ -170,13 +170,32 @@ class VLMTrainer:
             )
             audio_proj.requires_grad_(True)
 
+        if args.train.freeze_audio_tower and model_config.model_type == "openpangu_omni":
+            # OpenPangu Omni has a flat layout: ``model.audio_tower``
+            # (no ``thinker`` wrapper — Pangu Omni v2 doesn't ship a
+            # separate speech-generation talker module). The adapter
+            # projection — same role as Qwen's ``audio_tower.proj`` —
+            # is ``audio_tower.proj`` here too; see
+            # ``modeling_huanyu_audio_encoder.py:HuanyuAudioEncoder``.
+            self.base.model.audio_tower.requires_grad_(False)
+            self.base.model.audio_tower.proj.requires_grad_(True)
+
         pretty_print_trainable_parameters(self.base.model)
         helper.print_device_mem_info("VRAM usage after building model")
 
     def _build_model_assets(self):
         args: VeOmniVLMArguments = self.base.args
         self.base.processor = build_processor(args.model.tokenizer_path, max_pixels=MAX_PIXELS)
-        if self.base.model_config.model_type not in ("qwen2_5_omni", "qwen3_omni_moe"):
+        # Audio-bearing omni models (Qwen2.5-Omni, Qwen3-Omni-MoE,
+        # OpenPangu Omni v2) ship their own chat templates in the
+        # processor's tokenizer config — we should NOT overlay
+        # VeOmni's generic ``build_multimodal_chat_template`` on top
+        # because the data transform calls ``processor.apply_chat_template``
+        # directly and expects the upstream template (with audio /
+        # video / image content slots already baked in). For pure VLM
+        # models (Qwen2-VL, Qwen2.5-VL, Qwen3-VL, etc.) the generic
+        # builder works because they don't have audio tokens.
+        if self.base.model_config.model_type not in ("qwen2_5_omni", "qwen3_omni_moe", "openpangu_omni"):
             self.base.chat_template = build_multimodal_chat_template(
                 args.data.chat_template, self.base.processor.tokenizer
             )
@@ -198,10 +217,30 @@ class VLMTrainer:
         )
 
     def _build_collate_fn(self):
-        if self.base.model_config.model_type in ("qwen2_5_omni", "qwen3_omni_moe"):
+        model_type = self.base.model_config.model_type
+        if model_type in ("qwen2_5_omni", "qwen3_omni_moe"):
+            # Qwen-Omni audio path: data transform outputs
+            # ``input_features`` as ``(T_total, n_mels)`` (the qwen
+            # audio encoder transposes internally to land in
+            # ``(B=1, T, n_mels)``). So we pack along the T axis,
+            # which lives on ``pack_dim=0`` here.
             data_collate_info = {
                 "audio_feature_lengths": (0, False, None, None),
                 "input_features": (0, True, 0, 1),
+                "audio_mask": (-1, False, 0, 1),
+            }
+        elif model_type == "openpangu_omni":
+            # OpenPangu Omni audio path: data transform outputs
+            # ``input_features`` as ``(n_mels, T_total)`` — required
+            # by ``OpenPanguOmniModel.get_audio_features`` which
+            # passes the tensor straight to ``audio_tower`` whose
+            # forward does ``transpose(-1, -2).unsqueeze(0)`` to
+            # produce ``(B=1, T, n_mels)`` and then slices on
+            # ``dim=1`` using ``feature_lens`` cumsums. So T lives
+            # on ``pack_dim=1`` here.
+            data_collate_info = {
+                "audio_feature_lengths": (0, False, None, None),
+                "input_features": (1, True, 0, 1),
                 "audio_mask": (-1, False, 0, 1),
             }
         else:
