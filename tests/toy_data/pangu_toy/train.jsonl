@@ -1,0 +1,64 @@
+{"text": "盘古大模型是华为推出的大语言模型系列。"}
+{"text": "盘古-Omni 是支持文本、视觉和音频的多模态模型。"}
+{"text": "VeOmni 是字节跳动 Seed 团队开源的分布式训练框架。"}
+{"text": "MoE 模型通过路由机制将每个 token 分配给少数专家网络。"}
+{"text": "在多专家系统中，共享专家会处理所有 token，路由专家只处理被选中的 token。"}
+{"text": "FSDP 是 PyTorch 提供的全分片数据并行实现。"}
+{"text": "FSDP2 使用 fully_shard API，是 FSDP1 的可组合替代版本。"}
+{"text": "序列并行 Ulysses 通过 all-to-all 在头维和序列维之间交换。"}
+{"text": "混合精度训练通常使用 bfloat16 前向 + float32 参数。"}
+{"text": "梯度检查点用计算换内存，重新计算前向激活以避免存储。"}
+{"text": "NPU 是华为昇腾系列加速器。"}
+{"text": "CUDA 是 NVIDIA GPU 的并行计算平台。"}
+{"text": "Triton 是一种用于编写 GPU 内核的 Python DSL。"}
+{"text": "部分 RoPE 只旋转 head_dim 的前面一段，其余维度不变。"}
+{"text": "Multi-Head Causal (MHC) 是盘古独有的多流注意力变体。"}
+{"text": "RMS Norm 是一种归一化方法，比 LayerNorm 更简单。"}
+{"text": "Sinkhorn-Knopp 算法用于平衡专家负载。"}
+{"text": "在多模态模型中 vision encoder 通常是 ViT 架构。"}
+{"text": "Audio 编码器一般使用 Conformer 或 Whisper 风格的结构。"}
+{"text": "位置编码可以是绝对的、相对的，或者旋转的。"}
+{"text": "Speculative decoding 通过 draft 模型加速大模型推理。"}
+{"text": "KV cache 在 decoder 推理时缓存历史 key/value，减少重复计算。"}
+{"text": "Tokenizer 把字符串切成模型词表中的整数 id 序列。"}
+{"text": "Subword tokenization 在词频和泛化之间做权衡。"}
+{"text": "BPE、WordPiece 和 SentencePiece 是三种常见的分词算法。"}
+{"text": "Adam 优化器维护一阶和二阶动量，对每个参数自适应学习率。"}
+{"text": "AdamW 把权重衰减从梯度中解耦，对大模型更稳定。"}
+{"text": "Cosine 学习率衰减常配合 warmup 一起使用。"}
+{"text": "Gradient clipping 防止梯度爆炸，通常按全局范数裁剪。"}
+{"text": "Activation checkpointing 通过重计算换显存。"}
+{"text": "在专家并行中，每个 EP rank 只持有一部分专家的权重。"}
+{"text": "Pipeline parallel 把不同层放在不同设备上，按 batch chunks 流水。"}
+{"text": "Tensor parallel 沿权重的某一维切分，需要 all-reduce 同步。"}
+{"text": "DeepSpeed ZeRO 把优化器状态、梯度和参数都分片。"}
+{"text": "cpu_offload 把优化器状态搬到 CPU 内存，减小 GPU 占用。"}
+{"text": "Sequence parallel 沿序列维切，再在 attention 之前 all-gather。"}
+{"text": "Flash Attention 通过 tiling 在 SRAM 中计算注意力，避免存储完整矩阵。"}
+{"text": "SDPA 是 PyTorch 提供的标准注意力实现。"}
+{"text": "Eager attention 是最朴素的 PyTorch 注意力。"}
+{"text": "在低精度训练中常出现 NaN 或 Inf 的数值溢出。"}
+{"text": "梯度累积可以在显存有限时模拟大 batch size。"}
+{"text": "Curriculum learning 按难度递增地组织训练数据。"}
+{"text": "In-context learning 是大模型的一种 few-shot 能力。"}
+{"text": "RLHF 通过人类偏好反馈微调对齐目标。"}
+{"text": "DPO 把 RLHF 简化成直接偏好优化的一步。"}
+{"text": "LoRA 通过低秩矩阵微调，参数量大幅减少。"}
+{"text": "QLoRA 在量化基础上做 LoRA 微调。"}
+{"text": "量化把权重从 fp16 压到 int8 或 int4，加速推理。"}
+{"text": "SmoothQuant 通过激活和权重的转移缓解量化误差。"}
+{"text": "蒸馏把大模型的能力压到小模型中。"}
+{"text": "多模态对齐需要跨模态的对比学习或预训练任务。"}
+{"text": "CLIP 是经典的图文对比学习模型。"}
+{"text": "BLIP 在 CLIP 基础上加上了生成式任务。"}
+{"text": "LLaVA 通过线性映射把 CLIP 视觉特征接到 LLaMA。"}
+{"text": "Whisper 是 OpenAI 的语音识别模型。"}
+{"text": "Conformer 在 ASR 上是 Transformer + 卷积的混合架构。"}
+{"text": "AdamW 的权重衰减解耦使其更适合 Transformer 训练。"}
+{"text": "Mixed Precision 训练通过 fp16 或 bf16 加速训练。"}
+{"text": "BF16 的指数范围比 FP16 大，但精度低一些。"}
+{"text": "NPU 在某些算子上可能与 CUDA 实现产生数值差异。"}
+{"text": "MoE 的稀疏激活模式可以提升参数效率。"}
+{"text": "路由权重通常使用 softmax 或 sigmoid 加 top-k 选择。"}
+{"text": "专家平衡损失防止所有 token 流向少数专家。"}
+{"text": "盘古团队在自研的 transformers 分支上做 MoE 扩展。"}

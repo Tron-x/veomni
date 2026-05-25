@@ -1,0 +1,137 @@
+# Pangu Omni v2 — 8-NPU REAL 30B-A2B SFT smoke
+#
+# First real-weight multi-card smoke. Goals:
+#   1. Load the real 30B-A2B safetensors via FSDP2 + meta init.
+#   2. Run 5 SFT steps with ep_size=8 (one EP rank per NPU) — every
+#      routed-expert weight slice gets exactly num_experts/ep_size = 48
+#      experts (toy used 8/2=4).
+#   3. Confirm loss is finite and decreasing.
+#
+# This config exercises the entire stack:
+#   data -> tokenizer -> plaintext transform -> dataloader (dp_size=1
+#   when ep_size==world_size and ep_outside=False)
+#   -> CheckpointTensorConverter (per-expert -> fused 3D)
+#   -> FSDP2 sharded init from real safetensors
+#   -> ParallelPlan EP sharding of routed experts
+#   -> SDPA + eager MoE forward
+#   -> AdamW + grad clipping + 5 step loop
+#
+# Launch:
+#   torchrun --nnodes=1 --nproc_per_node=8 --master_port=29505 \
+#     tasks/train_text.py configs/text/pangu_real_8card.yaml
+#
+# Memory budget per NPU (910B2, 64GB HBM):
+#   - 30B bf16 params ≈ 60GB total. Non-EP params (~3GB) FSDP2-sharded
+#     across 8 ranks = ~0.4GB/rank. EP-sharded routed experts
+#     (~52GB total)  / 8 ranks = ~6.5GB/rank. Total params on-rank ≈ 7GB.
+#   - AdamW fp32 state: 2 × params shard ≈ 14GB/rank.
+#   - Activations: with grad ckpt + max_seq_len=512 + micro_bsz=1 ≈ 5-10GB.
+#   - Forward+backward peak ≈ 30-40GB.  Headroom for spikes ≈ 20+GB.
+
+model:
+  # Real 30B-A2B Pangu weights — text-only architecture view.
+  #
+  # The real model dir
+  # (/mnt/data_3/models/pangu/pangu_omini_30ba2_hf_model) ships
+  # `config.json` with
+  # `architectures=['OpenPanguUltraOmniForConditionalGeneration']`,
+  # which would route to the full multimodal `OpenPanguOmni` forward.
+  # That path currently crashes on text-only inputs because Pangu's
+  # MRoPE emits 3-axis position_ids that don't match transformers
+  # v5's `create_causal_mask` — see
+  # `pangu_omni_v2/tools/smoke_real_model_npu.py` docstring "Known gap".
+  #
+  # The "text-only view" dir below is the real model dir with all files
+  # symlinked except `config.json`, which is rewritten with
+  # `architectures=['OpenPanguV2ForCausalLM']`. Built by:
+  #
+  #   mkdir -p /mnt/data_3/models/pangu/pangu_omini_30ba2_text_only_view
+  #   ln -sf <real>/* .
+  #   rm config.json && jq '.architectures=["OpenPanguV2ForCausalLM"]' \
+  #     <real>/config.json > config.json
+  #
+  # Same weights, just dispatched to the Week 2 stable
+  # OpenPanguV2ForCausalLM path. (We can drop this once the multimodal
+  # MRoPE gap is fixed.)
+  model_path: /mnt/data_3/models/pangu/pangu_omini_30ba2_text_only_view
+  config_path: /mnt/data_3/models/pangu/pangu_omini_30ba2_text_only_view
+  tokenizer_path: /mnt/data_3/models/pangu/pangu_omini_30ba2_text_only_view
+  ops_implementation:
+    attn_implementation: sdpa
+    # CRITICAL for ep_size>1: the eager Pangu MoE forward indexes global
+    # expert IDs into ``gate_up_proj``, which is locally sharded under
+    # EP. The ``npu`` fused MoE kernel
+    # (``veomni/ops/kernels/moe/npu_group_gemm.py::npu_fused_moe_forward``)
+    # auto-detects ``ep_enabled`` and does the all-to-all dispatch +
+    # local group-gemm. Toy run can use ``eager``; real EP cannot.
+    # yaml accepts ``fused_npu``; ``_bind_veomni_ops`` strips the
+    # ``fused_`` prefix when looking up the KERNEL_REGISTRY entry
+    # (which is named ``"npu"``).
+    moe_implementation: fused_npu
+    cross_entropy_loss_implementation: eager
+    rms_norm_implementation: eager
+    swiglu_mlp_implementation: eager
+    rotary_pos_emb_implementation: eager
+    load_balancing_loss_implementation: eager
+
+data:
+  train_path: tests/toy_data/pangu_toy
+  data_type: plaintext
+  text_keys: text
+  max_seq_len: 512
+  train_size: 10000
+  dataloader:
+    num_workers: 0
+
+train:
+  accelerator:
+    ulysses_size: 1
+    # 8 NPUs / 1 node. ep_size=world_size=8 means each rank owns 48 of
+    # the 384 routed experts (30B-A2B). dp_size derives to 1 (no FSDP
+    # data shard) since EP and DP share the same axis when
+    # `ep_outside=False` — same convention as
+    # `configs/text/deepseek.yaml`. To get dp+ep both >1, scale to 2+
+    # nodes (16+ ranks).
+    ep_size: 8
+    ep_outside: false
+    fsdp_config:
+      fsdp_mode: fsdp2
+      full_shard: true
+      offload: false
+      mixed_precision:
+        enable: true
+    offload_config:
+      enable_activation: false
+  # 30B + bf16 activations need grad ckpt at any reasonable seq len.
+  # The toy config could skip it; the real model cannot.
+  gradient_checkpointing:
+    enable: true
+    enable_reentrant: false
+  global_batch_size: 8     # micro_bsz=1 × dp_size=1 × grad_accum=8
+  micro_batch_size: 1
+  max_steps: 5
+  num_train_epochs: 1
+  bsz_warmup_ratio: 0
+  optimizer:
+    type: adamw
+    # Tiny LR — we're touching production weights. Anything > 1e-5 on
+    # an untuned dataset would corrupt the model's existing alignment.
+    lr: 1.0e-6
+    lr_decay_style: constant
+    max_grad_norm: 1.0
+  init_device: meta
+  enable_full_determinism: false
+  empty_cache_steps: 500
+  seed: 42
+  checkpoint:
+    # Do NOT write checkpoints in the smoke — full DCP shard of 30B
+    # would take minutes and waste disk.
+    output_dir: /tmp/pangu_real_8card_smoke
+    manager: dcp
+    save_steps: 100
+    save_epochs: 0
+    save_hf_weights: false
+  wandb:
+    enable: false
+    project: pangu_smoke
+    name: pangu_real_8card

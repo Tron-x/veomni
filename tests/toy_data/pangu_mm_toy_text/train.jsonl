@@ -1,0 +1,2 @@
+{"source": "pangu_mm_sft_v1", "conversations": [{"from": "human", "value": "VeOmni 是什么？"}, {"from": "gpt", "value": "VeOmni 是字节跳动 Seed 团队开源的分布式多模态训练框架。"}], "images": [], "audios": [], "videos": []}
+{"source": "pangu_mm_sft_v1", "conversations": [{"from": "human", "value": "MoE 是什么的简称？"}, {"from": "gpt", "value": "Mixture of Experts，一种稀疏激活的模型架构。"}], "images": [], "audios": [], "videos": []}
