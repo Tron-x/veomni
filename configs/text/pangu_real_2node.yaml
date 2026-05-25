@@ -1,0 +1,172 @@
+# Pangu Omni v2 — 2-NODE 16-NPU REAL 30B-A2B text-only SFT
+#
+# Second-generation real-weight smoke after ``pangu_real_8card.yaml``.
+# Designed specifically to validate that multi-step training works once
+# the routed-expert AdamW state is allowed to shard across 16 ranks
+# instead of being EP-only-sharded across 8 ranks.
+#
+# Topology (auto-derived by ``parallel_state`` from world_size=16,
+# ep_size=8, ep_outside=false — matches docs/key_features/ep_fsdp2.md
+# §"Parallelism Setup" exactly):
+#
+#   ep_fsdp_size = world_size / ep_size = 16 / 8 = 2
+#   EP groups (intra-node, NPU all-to-all):
+#     master .26:  ranks [0..7]
+#     worker .23:  ranks [8..15]
+#   EP_FSDP groups (cross-node, sharded dim-1 of expert weight):
+#     [0, 8], [1, 9], [2, 10], [3, 11], [4, 12], [5, 13], [6, 14], [7, 15]
+#
+#   This is the optimal mapping: all-to-all (EP) stays inside NPU
+#   interconnect; FSDP all-gather over dim-1 of expert weights goes
+#   over the NIC (just like ``configs/multimodal/qwen3_omni`` 2-node
+#   smoke from the Qwen3-Omni-30B-A3B parity run).
+#
+# Memory budget per NPU (910B2, 64GB HBM):
+#   - 30B-A2B params total ≈ 28 GB bf16. With FSDP2 over 16 ranks and
+#     EP-sharded routed experts (~26.4 GB / 16 ≈ 1.65 GB) + FSDP-sharded
+#     non-expert (~1.9 GB / 16 ≈ 0.12 GB), per-rank bf16 weight ≈ 1.78 GB.
+#   - AdamW fp32 state (m + v + master): 12 B/param × 1.78 B ≈ 21 GB/rank.
+#     (vs ~42 GB/rank in pangu_real_8card.yaml — the whole point of
+#     going 2-node is to halve this and unblock multi-step training.)
+#   - Grads (bf16): ~3.6 GB/rank.
+#   - Activations (max_seq_len=512, grad ckpt, micro_bsz=1): ~5-10 GB.
+#   - Static peak ≈ 30-35 GB.  Step-2 forward+backward peak ≈ 40-45 GB.
+#   - Headroom for spikes ≈ 20+ GB. Comparable to the Qwen3-Omni-30B-A3B
+#     2-node run that landed at 43.5 / 64 GB peak.
+#
+# Observed (first successful run, 2026-05-25, master_port=29725, 2 epoch
+# packed steps over the 13-sample toy corpus):
+#   - Loss step 1 -> 2:    6.97 -> 6.95  (descending, grad_norm clipped
+#                                          from 113.5 -> 109.8 by clip=1.0)
+#   - Per-rank peak VRAM:  38.12 GB / 64 GB on both .26 and .23
+#   - Steady-state speed:  ~5.0 s/step (step-1 took 10.6 s for AdamW
+#                                       lazy state alloc, same pattern
+#                                       as Qwen3-Omni-30B-A3B 2-node).
+#   - Step-2 OOM:          GONE (the entire reason for this config).
+#     pangu_real_8card.yaml had step-1 succeed at peak 53 GB but step-2
+#     OOM during AdamW's first ``optimizer.step()`` when the fp32 state
+#     was lazily allocated; sharding that state across 16 ranks instead
+#     of 8 halves it from ~42 GB to ~21 GB and the spike fits.
+#
+# Launch (via the forge 2-node coordinator, identical pattern to the
+# Qwen3-30B-A3B / Qwen3-Omni 2-node smokes):
+#
+#   CONFIG=/root/VeOmni/configs/text/pangu_real_2node.yaml \
+#   ENTRY=/root/VeOmni/tasks/train_text.py \
+#   MODEL_DIR=/mnt/data_3/models/pangu/pangu_omini_30ba2_text_only_view \
+#   DATA_DIR=/root/VeOmni/tests/toy_data/pangu_toy \
+#   MASTER_ADDR=192.168.0.26 MASTER_PORT=29721 \
+#     bash /root/forge/forge/scripts/run_veomni_text_2node_smoke.sh
+#
+# Pre-conditions (verified by the coordinator's pre-flight + a few that
+# are NOT auto-verified — learned the hard way during the first run):
+#   - /mnt/data_3/models/pangu/pangu_omini_30ba2_text_only_view present
+#     on BOTH .26 and .23 with config.json arch=OpenPanguV2ForCausalLM
+#     (rewritten on top of the symlinked hf_model dir).
+#   - tests/toy_data/pangu_toy/train.jsonl present on BOTH (shipped in
+#     the same commit as this yaml).
+#   - SSH .26 <-> .23 on port 36000 (NPU interconnect alias).
+#   - transformers >= 5.0.0 on BOTH nodes. Pangu's tokenization_sophon_fast
+#     uses ``from transformers.tokenization_utils_tokenizers import
+#     TokenizersBackend``, which only exists in v5. The default
+#     ``uv sync --extra gpu --extra audio --dev`` pins v4.57.3 — for the
+#     real-weight runs both hosts MUST be synced with
+#     ``uv sync --no-group transformers-stable --extra transformers5-exp
+#     --extra gpu --extra audio --dev`` (see .agents/knowledge/uv.md).
+#     Worker mismatch surfaces as ``ModuleNotFoundError: No module named
+#     'transformers.tokenization_utils_tokenizers'`` on rank-1 during
+#     ``AutoTokenizer.from_pretrained`` and crashes ALL ranks via
+#     ChildFailedError.
+#   - /etc/hosts on BOTH nodes must resolve the OTHER node's hostname.
+#     c10d's rendezvous TCPStore self-advertises by ``socket.gethostname()``
+#     (not by MASTER_ADDR IP), so the peer must be able to ``getent hosts
+#     <peer-hostname>``. Missing entries surface as endless
+#     ``[c10d] The IPv6 network addresses of (<peer-hostname>, <port>)
+#     cannot be retrieved (gai error: -2)`` warnings and a stalled
+#     rendezvous. Concretely for the .26 <-> .23 pair:
+#       master (.26) /etc/hosts:  192.168.0.23  liteserver-c001-1-4
+#       worker (.23) /etc/hosts:  192.168.0.26  liteserver-c001-2-0
+#     Verify with ``getent hosts liteserver-c001-1-4`` from .26 and
+#     ``getent hosts liteserver-c001-2-0`` from .23 before launching.
+
+model:
+  # Same text-only architecture view as pangu_real_8card.yaml. The
+  # multimodal MRoPE x create_causal_mask gap (see
+  # pangu_omni_v2/tools/smoke_real_model_npu.py "Known gap") is
+  # tangential to this 2-node OOM-validation milestone.
+  model_path: /mnt/data_3/models/pangu/pangu_omini_30ba2_text_only_view
+  config_path: /mnt/data_3/models/pangu/pangu_omini_30ba2_text_only_view
+  tokenizer_path: /mnt/data_3/models/pangu/pangu_omini_30ba2_text_only_view
+  ops_implementation:
+    attn_implementation: sdpa
+    # ``fused_npu`` is mandatory for ep_size > 1 (the eager Pangu MoE
+    # forward indexes global expert IDs into ``gate_up_proj`` which is
+    # locally sharded under EP). Same constraint as the single-node
+    # 8-card config.
+    moe_implementation: fused_npu
+    cross_entropy_loss_implementation: eager
+    rms_norm_implementation: eager
+    swiglu_mlp_implementation: eager
+    rotary_pos_emb_implementation: eager
+    load_balancing_loss_implementation: eager
+
+data:
+  train_path: tests/toy_data/pangu_toy
+  data_type: plaintext
+  text_keys: text
+  max_seq_len: 512
+  train_size: 10000
+  dataloader:
+    num_workers: 0
+
+train:
+  accelerator:
+    ulysses_size: 1
+    # 8 NPUs / node × 2 nodes = 16 ranks total.
+    # ep_size=8 keeps the all-to-all collective intra-node (NPU
+    # interconnect, fast). ep_outside=false makes EP the inner mesh
+    # dim, so EP_FSDP becomes the outer dim — physically that means
+    # the EP_FSDP group [0, 8] is master.0 + worker.0, which lets
+    # FSDP all-gather expert dim-1 over the NIC. See docstring above
+    # for the exact mesh layout.
+    ep_size: 8
+    ep_outside: false
+    fsdp_config:
+      fsdp_mode: fsdp2
+      full_shard: true
+      offload: false
+      mixed_precision:
+        enable: true
+    offload_config:
+      enable_activation: false
+  # 30B + bf16 activations need grad ckpt at any reasonable seq len.
+  gradient_checkpointing:
+    enable: true
+    enable_reentrant: false
+  # global_bsz=16: micro_bsz=1 × dp_size=2 × grad_accum=8.
+  # dp_size derives to 2 when ep_size=8 and ep_outside=false at
+  # world_size=16, since DP ends up sharing the EP_FSDP axis.
+  global_batch_size: 16
+  micro_batch_size: 1
+  max_steps: 5
+  num_train_epochs: 1
+  bsz_warmup_ratio: 0
+  optimizer:
+    type: adamw
+    lr: 1.0e-6
+    lr_decay_style: constant
+    max_grad_norm: 1.0
+  init_device: meta
+  enable_full_determinism: false
+  empty_cache_steps: 500
+  seed: 42
+  checkpoint:
+    output_dir: /tmp/pangu_real_2node_smoke
+    manager: dcp
+    save_steps: 100
+    save_epochs: 0
+    save_hf_weights: false
+  wandb:
+    enable: false
+    project: pangu_smoke
+    name: pangu_real_2node
