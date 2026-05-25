@@ -1,0 +1,120 @@
+# Pangu Omni v2 30B-A2B — 1-node 8-NPU "align baseline" config
+#
+# Twin of ``pangu_real_2node_align.yaml`` for the strict numerical
+# alignment experiment. Both yamls share the same global_batch_size,
+# data path, max_seq_len, dyn_bsz=false, seed and optimizer settings —
+# the ONLY difference is the launcher topology (1 node x 8 NPU here vs
+# 2 nodes x 8 NPU there). If the framework's DP/FSDP/EP math is correct,
+# the per-step global mean loss should agree to within ~1% (statistical
+# noise from token-count-unweighted cross-rank mean over variable-length
+# c4_test samples). Material divergence would expose a real bug.
+#
+# Why this twin exists: ``pangu_real_8card.yaml`` and
+# ``pangu_real_2node.yaml`` were tuned for end-to-end smoke tests with
+# the 13-sample toy corpus + dyn_bsz packing. That made the runs FAST
+# but the per-step packed-sequence content differs between dp=8 and
+# dp=16 (DistributedSampler chunking + per-rank dyn_bsz buffer-fill),
+# yielding loss 8.51 vs 6.97 on step-1 — superficially scary, but
+# explained entirely by the data-side reshuffle, not by FSDP/EP.
+#
+# Differences vs ``pangu_real_8card.yaml``:
+#   - data.train_path: c4_test (2000 plaintext samples, >> global_bsz=16)
+#   - data.dyn_bsz: false (each sample becomes one batch element padded
+#                          to max_seq_len; attention masks per-sample,
+#                          no cross-sample packing context)
+#   - global_batch_size: 8 -> 16 (matches the 2-node twin so the global
+#                                 sample set per step is identical:
+#                                 perm[0..15], perm[16..31], perm[32..47]
+#                                 under seed=42)
+#   - max_steps: 5 -> 3 (cheap baseline; 3 steps suffice to compare
+#                        loss decay)
+#
+# Launch (single-node, identical-port-free choice 29731):
+#   torchrun --nnodes=1 --nproc_per_node=8 --master_port=29731 \
+#     tasks/train_text.py configs/text/pangu_real_8card_align.yaml
+#
+# Memory budget: should match ``pangu_real_8card.yaml`` baseline of
+# ~58 GB / 64 GB peak per NPU. activation budget unchanged because
+# the worst-case forward processes the same max_seq_len=512 tokens
+# regardless of dyn_bsz.
+
+model:
+  model_path: /mnt/data_3/models/pangu/pangu_omini_30ba2_text_only_view
+  config_path: /mnt/data_3/models/pangu/pangu_omini_30ba2_text_only_view
+  tokenizer_path: /mnt/data_3/models/pangu/pangu_omini_30ba2_text_only_view
+  ops_implementation:
+    attn_implementation: sdpa
+    moe_implementation: fused_npu
+    cross_entropy_loss_implementation: eager
+    rms_norm_implementation: eager
+    swiglu_mlp_implementation: eager
+    rotary_pos_emb_implementation: eager
+    load_balancing_loss_implementation: eager
+
+data:
+  # Same plaintext fixture the Qwen3-30B-A3B 2-node smoke uses
+  # (/root/torchtitan/tests/assets/c4_test/data.json, 2000 lines).
+  # Required on BOTH .26 and .23 for the matching 2-node twin run.
+  train_path: /root/torchtitan/tests/assets/c4_test
+  data_type: plaintext
+  text_keys: text
+  max_seq_len: 512
+  train_size: 10000
+  dataloader:
+    num_workers: 0
+
+train:
+  accelerator:
+    ulysses_size: 1
+    ep_size: 8
+    ep_outside: false
+    fsdp_config:
+      fsdp_mode: fsdp2
+      full_shard: true
+      offload: false
+      mixed_precision:
+        enable: true
+    offload_config:
+      enable_activation: false
+  gradient_checkpointing:
+    enable: true
+    enable_reentrant: false
+  # Disable dyn_bsz packing — this is the whole point of the align
+  # experiment. Each sample becomes a single batch element padded
+  # (or truncated) to max_seq_len, so the per-rank attention
+  # boundaries are fixed by sample identity, not by the per-rank
+  # buffer-fill ordering which would diverge under different dp_size.
+  # NOTE: ``dyn_bsz`` lives in the ``train`` dataclass (next to
+  # ``micro_batch_size`` / ``global_batch_size``), not under ``data:``
+  # — putting it under ``data:`` is silently ignored by the parser
+  # (the value defaults back to True).
+  dyn_bsz: false
+  # MUST match the 2-node twin (pangu_real_2node_align.yaml). DP=8 will
+  # derive num_micro_batch=2 (each rank sees 2 samples / step), DP=16
+  # will derive num_micro_batch=1 (each rank sees 1 sample / step), but
+  # the global 16-sample set per step is the same — that's the property
+  # that makes the mean-reduced loss directly comparable.
+  global_batch_size: 16
+  micro_batch_size: 1
+  max_steps: 3
+  num_train_epochs: 1
+  bsz_warmup_ratio: 0
+  optimizer:
+    type: adamw
+    lr: 1.0e-6
+    lr_decay_style: constant
+    max_grad_norm: 1.0
+  init_device: meta
+  enable_full_determinism: false
+  empty_cache_steps: 500
+  seed: 42
+  checkpoint:
+    output_dir: /tmp/pangu_real_8card_align
+    manager: dcp
+    save_steps: 100
+    save_epochs: 0
+    save_hf_weights: false
+  wandb:
+    enable: false
+    project: pangu_align
+    name: pangu_real_8card_align
