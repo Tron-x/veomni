@@ -440,9 +440,59 @@ def parallelize_model_fsdp2(
         # for high-precision modules, we do not reshard them after forward to avoid all-gather them in backward
         # these modules will stay in GPU memory so please ensure high-precision modules do not contain too many parameters
         fsdp_kwargs_without_mp["reshard_after_forward"] = False
+        logger.info_rank0(
+            f"FSDP2 mp_policy bypass classes: {[c.__name__ for c in mp_ignored_classes]} "
+            "(no mp_policy, reshard_after_forward=False)"
+        )
     else:
         mp_ignored_classes = None
         fsdp_kwargs_without_mp = fsdp_kwargs
+
+    # ``get_no_input_cast_modules_in_mixed_precision()`` — finer-grained sibling of
+    # ``get_ignore_modules_in_mixed_precision``. The "ignore" variant above drops the
+    # entire mixed-precision policy (so params keep their loaded dtype, typically fp32
+    # under VeOmni's "fp32 storage + bf16 compute" design). The "no input cast" variant
+    # below KEEPS the param-dtype cast (so compute still happens in the same dtype as
+    # the rest of the model, e.g. bf16) but disables the per-FSDP-boundary input cast
+    # so any fp32 floating-point arguments — most importantly the ``(cos, sin)``
+    # rotary tuple computed once at the top of the vision tower — flow into the block
+    # forward unchanged. This is what aligns single-card (no FSDP, fp32 cos/sin) with
+    # multi-card forward for models like Pangu Omni v2's vision blocks, where the
+    # entire fp32 RoPE precision is preserved across 26 vision-block boundaries.
+    # See ``veomni/models/transformers/pangu_omni_v2/README.md`` §"Multi-card visual
+    # drift" for the empirical bisection that led here (post_block_00 drift first
+    # appeared inside the per-block RMSNorm under the original mp-bypass hook).
+    if hasattr(model, "get_no_input_cast_modules_in_mixed_precision"):
+        no_input_cast_modules_in_mixed_precision = model.get_no_input_cast_modules_in_mixed_precision()
+    else:
+        no_input_cast_modules_in_mixed_precision = None
+
+    if no_input_cast_modules_in_mixed_precision:
+        assert isinstance(no_input_cast_modules_in_mixed_precision, tuple), (
+            "get_no_input_cast_modules_in_mixed_precision must return a tuple of nn.Module classes!"
+        )
+        no_input_cast_classes = no_input_cast_modules_in_mixed_precision
+        if mixed_precision.enable and fsdp_kwargs.get("mp_policy") is not None:
+            base_mp = fsdp_kwargs["mp_policy"]
+            no_cast_mp_policy = MixedPrecisionPolicy(
+                param_dtype=base_mp.param_dtype,
+                reduce_dtype=base_mp.reduce_dtype,
+                output_dtype=base_mp.output_dtype,
+                cast_forward_inputs=False,
+            )
+            fsdp_kwargs_no_input_cast = dict(fsdp_kwargs)
+            fsdp_kwargs_no_input_cast["mp_policy"] = no_cast_mp_policy
+            logger.info_rank0(
+                f"FSDP2 mp_policy no-input-cast classes: {[c.__name__ for c in no_input_cast_classes]} "
+                "(param_dtype kept, cast_forward_inputs=False)"
+            )
+        else:
+            # No mixed precision active at all — nothing to disable, just shard
+            # normally.
+            fsdp_kwargs_no_input_cast = fsdp_kwargs
+    else:
+        no_input_cast_classes = None
+        fsdp_kwargs_no_input_cast = fsdp_kwargs
 
     # prepare extra_parallel_fsdp2 kwargs
     extra_parallel_fsdp_kwargs = {}
@@ -523,8 +573,22 @@ def parallelize_model_fsdp2(
         #      when layer_mod (also called as target module, e.g. decoder.embed_tokens),
         #      is the parent of or equal to extra_parallel_mod[para] (e.g. ToyEmbed),
         #      no need to shard layer_mod again.
+        #   When the target class itself is mp-ignored (e.g. some vision/audio
+        #   towers that must stay in their loaded dtype, no FSDP-level cast at
+        #   all) shard it with ``fsdp_kwargs_without_mp``.
+        #   When the target class is "no-input-cast" (e.g. multimodal vision
+        #   blocks that need param-dtype cast for bf16 matmul but must NOT
+        #   downcast fp32 cos/sin position embeddings at the FSDP boundary)
+        #   shard it with ``fsdp_kwargs_no_input_cast``. See
+        #   ``veomni/models/transformers/pangu_omni_v2/README.md`` §"Multi-card
+        #   visual drift" for the empirical motivation.
         if not isinstance(layer_mod, FSDPModule):
-            fully_shard(layer_mod, **fsdp_kwargs)
+            if mp_ignored_classes and isinstance(layer_mod, mp_ignored_classes):
+                fully_shard(layer_mod, **fsdp_kwargs_without_mp)
+            elif no_input_cast_classes and isinstance(layer_mod, no_input_cast_classes):
+                fully_shard(layer_mod, **fsdp_kwargs_no_input_cast)
+            else:
+                fully_shard(layer_mod, **fsdp_kwargs)
             layer_mod._fsdp_modules.append(layer_mod)
         logger.info_rank0(f"{layer_fqn=}, {layer_mod._fsdp_modules=}")
 
@@ -533,7 +597,9 @@ def parallelize_model_fsdp2(
 
     # configure manual prefetching when needed
     need_manual_prefetch = (
-        parallel_state.any_extra_parallel_enabled or mp_ignored_classes is not None
+        parallel_state.any_extra_parallel_enabled
+        or mp_ignored_classes is not None
+        or no_input_cast_classes is not None
     ) and kwargs.pop("enable_forward_prefetch", True)
     if need_manual_prefetch:
         blocks = [pair[1][0] for pair in layer_pairs_list]  # all target modules

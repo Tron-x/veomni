@@ -170,3 +170,7 @@ nsysoutput/
 
 # Agents worksspace should not be tracked by the primary repo.
 .agents_workspace/
+
+# Ascend NPU runtime artifacts (auto-generated next to entry script,
+# e.g. when fusion ops are recompiled on the fly).
+fusion_result.json
