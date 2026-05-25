@@ -13,12 +13,14 @@
 # limitations under the License.
 
 from . import (
+    _pangu_common,
     deepseek_v3,
     flux,
     glm_moe_dsa,
     janus,
     llama,
     movqgan,
+    pangu_omni_v2,
     qwen2,
     qwen2_5_omni,
     qwen2_5vl,
@@ -41,6 +43,7 @@ __all__ = [
     "janus",
     "llama",
     "movqgan",
+    "pangu_omni_v2",
     "qwen2",
     "qwen2_5_omni",
     "qwen2_5vl",
