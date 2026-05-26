@@ -1,5 +1,7 @@
 import math
-from typing import List
+import os
+import re
+from typing import Dict, List
 
 import torch
 import torch.distributed as dist
@@ -16,6 +18,35 @@ from ..parallel_state import get_parallel_state
 
 
 logger = get_logger(__name__)
+
+
+# ------------------------------------------------------------------ #
+# Optional per-layer grad-norm dump for numerical-alignment debugging.
+#
+# Enabled by env var VEOMNI_GRAD_DUMP=<path> — when set, every call to
+# ``extra_parallel_fsdp2_clip_grad_norm`` buckets parameters by
+# ``transformer-block index`` (extracted from ``named_parameters()`` name)
+# and ``param group`` (``non_extra_parallel`` / ``ep`` / ``emb`` / ...),
+# then performs ONE all-reduce per bucket to produce a globally-reduced
+# L2 norm. Output format (one line per bucket):
+#
+#   STEP=<step> LAYER=<block_idx_or_'other'> GROUP=<name> NORM=<float>
+#
+# This is intentionally NOT integrated into clip_grad_norm's reduction
+# tree — it adds extra communication and floating-point work, so MUST be
+# gated by env var. Used to:
+#   (a) compare per-layer global grad norm between two distributed
+#       topologies (e.g. 1node-8NPU vs 2node-16NPU) to find the layer
+#       where divergence first appears;
+#   (b) confirm whether divergence concentrates in MoE layers (=> EP
+#       routing/EP-FSDP sharding effect) vs attention layers (=> FSDP
+#       reduce-scatter ordering effect).
+#
+# Step number is tracked via a module-level counter that increments each
+# time this clipper is invoked (one invocation = one training step).
+# ------------------------------------------------------------------ #
+_GRAD_DUMP_STEP = 0
+_LAYER_RE = re.compile(r"\.layers\.(\d+)\.")
 
 
 def clip_grad_norm(
@@ -117,12 +148,115 @@ def extra_parallel_fsdp2_clip_grad_norm(
     else:
         total_norm = (non_extra_parallel_total + sum(extra_parallel_total.values())) ** (1.0 / float(norm_type))
 
+    # Optional per-layer grad-norm dump — MUST run BEFORE clip_grads_with_norm_
+    # so the per-layer values are PRE-clip (i.e. directly comparable to the
+    # ``grad_norm`` printed by the trainer for the same step). If we dumped
+    # after clipping, every layer's value would be scaled by
+    # ``min(max_norm / total_norm, 1.0)``, which changes across runs (since
+    # total_norm itself differs across the topologies we're comparing) and
+    # would mix two distinct effects in the diff.
+    dump_path = os.environ.get("VEOMNI_GRAD_DUMP", "").strip()
+    if dump_path:
+        _dump_per_layer_grad_norms(model, norm_type=norm_type, dump_path=dump_path)
+
     # Apply the same clip coefficient to both groups
     for para in ps.extra_parallel_names:
         torch.nn.utils.clip_grads_with_norm_(extra_parallel_params[para], max_norm, total_norm, foreach=foreach)
     torch.nn.utils.clip_grads_with_norm_(non_extra_parallel_params, max_norm, total_norm, foreach=foreach)
 
     return total_norm
+
+
+def _classify_param_group(model, p: torch.nn.Parameter) -> str:
+    """Return which ``_extra_parallel_param_groups`` bucket ``p`` belongs to."""
+    groups = getattr(model, "_extra_parallel_param_groups", None)
+    if groups is None:
+        return "unknown"
+    for name, params in groups.items():
+        for q in params:
+            if q is p:
+                return name
+    return "unknown"
+
+
+def _extract_layer_key(name: str) -> str:
+    """Bucket key: transformer-block index if present, else 'other'."""
+    m = _LAYER_RE.search(name)
+    return f"layer{int(m.group(1)):02d}" if m else "other"
+
+
+@torch.no_grad()
+def _dump_per_layer_grad_norms(model, norm_type: float, dump_path: str) -> None:
+    """Compute and log globally-reduced per-(layer,group) L2 grad norms.
+
+    Communication cost: ONE all-reduce per non-empty bucket. With Pangu
+    Omni v2 (27 transformer layers) and 2 param groups (non_extra_parallel
+    and ep), this is at most ~54 small scalar all-reduces per step — fine
+    for short alignment runs but absolutely NOT for production.
+    """
+    global _GRAD_DUMP_STEP
+    _GRAD_DUMP_STEP += 1
+    step = _GRAD_DUMP_STEP
+
+    if math.isinf(norm_type):
+        return  # inf-norm path not implemented for the dump; not needed.
+    p = float(norm_type)
+
+    ps = get_parallel_state()
+    fsdp_group = ps.fsdp_group
+    extra_parallel_group = {
+        para: ps.extra_parallel_group(para) if ps.extra_parallel_enabled(para) else None
+        for para in ps.extra_parallel_names
+    }
+    extra_parallel_fsdp_group = {
+        para: ps.extra_parallel_fsdp_device_mesh[para][f"{para}_fsdp"].get_group()
+        if ps.extra_parallel_enabled(para) and ps.extra_parallel_fsdp_device_mesh[para] is not None
+        else None
+        for para in ps.extra_parallel_names
+    }
+
+    buckets: Dict[tuple[str, str], List[torch.nn.Parameter]] = {}
+    for name, param in model.named_parameters():
+        if param.grad is None:
+            continue
+        layer_key = _extract_layer_key(name)
+        group_key = _classify_param_group(model, param)
+        buckets.setdefault((layer_key, group_key), []).append(param)
+
+    # Different EP ranks may not route tokens to the same experts, so some
+    # buckets can be locally empty. Every rank must still issue collectives in
+    # the same order, reducing a zero tensor for missing buckets.
+    bucket_keys = sorted(buckets)
+    if dist.is_initialized():
+        gathered_keys = [None for _ in range(dist.get_world_size())]
+        dist.all_gather_object(gathered_keys, bucket_keys)
+        bucket_keys = sorted({key for rank_keys in gathered_keys for key in rank_keys})
+
+    is_rank0 = dist.get_rank() == 0 if dist.is_initialized() else True
+    fh = None
+    if is_rank0:
+        fh = open(dump_path, "a")
+
+    for layer_key, group_key in bucket_keys:
+        params = buckets.get((layer_key, group_key), [])
+        local_sum = _local_pth_sum(params, p)
+        if group_key in ps.extra_parallel_names:
+            efsdp = extra_parallel_fsdp_group.get(group_key)
+            if efsdp is not None:
+                dist.all_reduce(local_sum, op=dist.ReduceOp.SUM, group=efsdp)
+            egroup = extra_parallel_group.get(group_key)
+            if egroup is not None:
+                dist.all_reduce(local_sum, op=dist.ReduceOp.SUM, group=egroup)
+        else:
+            if fsdp_group is not None:
+                dist.all_reduce(local_sum, op=dist.ReduceOp.SUM, group=fsdp_group)
+
+        layer_norm = local_sum.pow(1.0 / p).item()
+        if fh is not None:
+            fh.write(f"STEP={step} LAYER={layer_key} GROUP={group_key} NORM={layer_norm:.8e}\n")
+
+    if fh is not None:
+        fh.close()
 
 
 # compute local sum of param gard norm

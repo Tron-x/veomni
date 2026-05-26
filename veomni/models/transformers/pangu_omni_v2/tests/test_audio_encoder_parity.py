@@ -95,6 +95,9 @@ def _load_reference_audio_module():
     if _REF_MOD_CACHE is not None:
         return _REF_MOD_CACHE
 
+    if not PANGU_MODEL_DIR.exists():
+        pytest.skip(f"Pangu reference model directory not found: {PANGU_MODEL_DIR}")
+
     _ours_module()  # force VeOmni device-init to run first
 
     from veomni.models.transformers._pangu_common._test_compat import install_pangu_reference_torch_npu_mock
@@ -167,6 +170,27 @@ def test_huanyu_rotary_embedding_parity():
     assert ref_rope.emb.shape == our_rope.emb.shape == (32, 1, 1, 8)
     assert (ref_rope.emb - our_rope.emb).abs().max().item() == 0.0
     assert (ref_rope.inv_freq - our_rope.inv_freq).abs().max().item() == 0.0
+
+
+def test_huanyu_rotary_embedding_grows_for_packed_audio():
+    """Packed training batches can exceed the reference's 1024-step cache."""
+    ours_mod = _ours_module()
+    cfg = _toy_audio_config()
+    enc = ours_mod.HuanyuAudioEncoder(cfg).eval()
+
+    enc.rotary_emb = ours_mod.HuanyuRotaryEmbedding(
+        head_dim=cfg.d_model // cfg.encoder_attention_heads,
+        max_position_embeddings=32,
+        base=10000,
+    )
+    original = enc.rotary_emb.emb.clone()
+    position_ids = torch.arange(48)
+
+    cos, sin = enc.select_cos_sin(position_ids)
+
+    assert cos.shape == sin.shape == (48, 1, cfg.d_model // cfg.encoder_attention_heads)
+    assert enc.rotary_emb.emb.shape[0] >= 48
+    assert torch.equal(enc.rotary_emb.emb[:32], original)
 
 
 # ---------------------------------------------------------------------------

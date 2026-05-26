@@ -214,7 +214,7 @@ torchrun --nnodes=1 --nproc_per_node=8 --master_port=29510 \
 #           matches the 1-NPU fused_npu reference run bit-for-bit
 ```
 
-### Multi-card multimodal (vision + text) parity — landed
+### Multi-card multimodal (vision + text) parity — landed, with fused-MoE drift caveat
 
 Validated 2026-05-22 / 2026-05-23:
 
@@ -268,8 +268,40 @@ Validated 2026-05-22 / 2026-05-23:
 
 Single-card multimodal HF parity is verified non-regressive after
 all of the above (`oracle_check.py --mode veomni --n-samples 3
---tolerance-max 5e-3 --tolerance-mean 5e-4` PASSes 3/3, max-diff
+--tolerance-max 1e-3 --tolerance-mean 1e-4` PASSes 3/3, max-diff
 2.07e-5 — see the `OCRBench` row of the cross-eval table below).
+
+**2026-05-25 revalidation (real 30B-A2B full multimodal weights)**:
+
+| Gate | Command / report | Result | Interpretation |
+|---|---|---|---|
+| 1-NPU full multimodal OCRBench vs HF | `tools/oracle_check.py --mode veomni --n-samples 3 --tolerance-max 1e-3 --tolerance-mean 1e-4` → `/tmp/pangu_fullmm_single_vs_hf_3.json` | **PASS 3/3**, worst `2.074e-05` (`ocrbench_2`) | Single-card adapter path (`OpenPanguOmni`, visual + audio + language + lm_head) matches the HF oracle. |
+| 1-NPU audio oracle vs HF | `tools/oracle_check.py --mode veomni --samples /mnt/data_3/models/pangu_audio_oracle/data/audio_demo.jsonl --baseline /mnt/data_3/models/pangu_audio_oracle/results/audio_hf_outputs.jsonl --n-samples 3` → `/tmp/pangu_audio_single_vs_hf_3.json` | **PASS 3/3**, worst `0.000e+00` | Audio path is bit-identical under the oracle setting (`allow_internal_format=True`). |
+| 8-NPU full multimodal OCRBench vs HF | `multi_card_multimodal_parity_runner.py configs/text/pangu_real_8card_multimodal.yaml` with `PARITY_N_SAMPLES=3`, `PARITY_TOLERANCE=5e-2` → `/tmp/pangu_fullmm_8card_vs_hf_3.json` | **FAIL 2/3**, `ocrbench_0` max `2.294e-01` | Multi-card full multimodal has a sample-dependent logp drift. It is not a visual-tower wiring failure; see localization below. |
+
+The 2026-05-25 localization for the failing `ocrbench_0` sample:
+
+* `MM_PARITY_CAPTURE=1 MM_PARITY_DEEP_CAPTURE=1` on the 8-NPU runner
+  plus `single_card_visual_capture.py` on the same sample shows
+  `visual_output` is **bit-identical** between 1-NPU and 8-NPU
+  (`max=0.0000e+00`, `mean=0.0000e+00`). The drift is therefore not in
+  the visual tower, patch embedding, merger, or image-token scatter.
+* 1-NPU eager-MoE oracle gives `ocrbench_0` first-token logp `-0.4950`
+  (matches HF). 1-NPU `PARITY_MOE_IMPL=fused_npu` gives `-0.6651`.
+  8-NPU `fused_npu` + FSDP2 + EP gives `-0.7243`. This pins the dominant
+  drift to the language MoE fused kernel / EP production path, not to the
+  multimodal encoder path.
+
+Current safe reading:
+
+* **Single-card full multimodal precision is green** against the HF oracle.
+* **Text-only multi-card is numerically equivalent to 1-card `fused_npu`**;
+  FSDP/EP add no measurable drift beyond the MoE kernel choice.
+* **Full multimodal 8-card forward is functional but not HF-parity-clean**:
+  high-confidence OCR samples stay within `1e-4`-level drift, but
+  low-confidence samples can amplify the same language-MoE fused-kernel
+  noise into `O(1e-1)` logp differences. Treat this as a production
+  training tolerance issue, not as a visual/audio tower correctness issue.
 
 **Multi-card multimodal visual + audio parity — bit-exact with
 single-card (2026-05-24)**: after the fixes described below, on 8
@@ -290,12 +322,13 @@ tower**:
   (`/mnt/data_3/models/pangu_audio_oracle/data/audio_demo.jsonl`).
 
 The remaining inter-sample logp drift against the HF baseline (≤
-2e-4 for high/mid-confidence samples, up to ~2e-1 for one
-low-confidence vision sample and audio_0 / audio_1) comes from the
-**language-model MoE topk-selection sensitivity to `fused_npu` vs
-`eager`** (see "fused_npu vs eager MoE topk" note below), not from
-the vision or audio tower — verified by capturing tower outputs and
-diffing single-card vs 8-card after each fix.
+2e-4 for high/mid-confidence samples, up to `2.294e-1` for the
+low-confidence `ocrbench_0` revalidation sample and similarly large
+audio outliers when using `fused_npu`) comes from the
+**language-model MoE sensitivity to `fused_npu` vs `eager`** (see
+"fused_npu vs eager MoE" note below), not from the vision or audio
+tower — verified by capturing tower outputs and diffing single-card
+vs 8-card after each fix.
 
 #### Two drift sources, both fixed
 
@@ -424,20 +457,21 @@ then diff:
 [audio_tower_out]   BIT-EXACT |Δ| max=0.000e+00
 ```
 
-The `audio_demo.jsonl` runs vs HF baseline still show `audio_0`
-max=0.181 and `audio_1` max=0.114 — that drift is **not** in the
-audio tower (which we just proved is bit-exact). It's the same
-`fused_npu` vs `eager` **MoE topk drift** that explains the
-`ocrbench_0` vision-path 0.229 outlier: at ep_size>1 we must use
-`moe_implementation: fused_npu` (eager fails an
+The `audio_demo.jsonl` runs vs HF baseline under the multi-card
+`fused_npu` production path can show large logp drift on low-confidence
+tokens — that drift is **not** in the audio tower (which we proved is
+bit-exact). It's the same `fused_npu` vs `eager` **MoE drift** that
+explains the `ocrbench_0` vision-path `0.229` outlier: at ep_size>1
+we must use `moe_implementation: fused_npu` (eager fails an
 `IndexError: index 49 is out of bounds for dimension 0 with size
 48` because eager indexes global expert IDs into the EP-sharded
 weights). The single-card oracle uses `moe_implementation: eager`
 which matches HF byte-for-byte, but the moment we switch any
 single-card run to `fused_npu` the same audio_0 / audio_1 / audio_2
-drift reappears (verified with `PARITY_MOE_IMPL=fused_npu` on
-`single_card_visual_capture.py`: audio_0 diff=0.177 vs HF), proving
-the drift comes from kernel choice, not from FSDP / EP sharding.
+drift reappears (verified with `PARITY_MOE_IMPL=fused_npu` on the
+single-card capture/oracle path), proving the drift comes primarily
+from kernel choice, not from FSDP / EP sharding or multimodal tower
+wiring.
 
 ```bash
 PARITY_SAMPLES=/mnt/data_3/models/pangu/test_hf_percision.0518.parallel/data/ocrbench.jsonl \
@@ -448,8 +482,10 @@ PARITY_N_SAMPLES=10 \
 torchrun --nnodes=1 --nproc_per_node=8 --master_port=29512 \
     veomni/models/transformers/pangu_omni_v2/tools/multi_card_multimodal_parity_runner.py \
     configs/text/pangu_real_8card_multimodal.yaml
-# 2026-05-23 status: 9/10 PASS at 5e-2 strict; 10/10 top-1 correct.
-# Worst max-diff 1.12e-1 on sample 0 (low-confidence prediction).
+# 2026-05-25 revalidation: 2/3 PASS at 5e-2 strict on first 3 OCRBench
+# samples; ocrbench_0 fails with max-diff 2.294e-1, while ocrbench_1/2
+# stay around 1e-4. Top-1 token remains correct; the drift is a softmax
+# denominator/logp sensitivity issue under fused_npu MoE.
 ```
 
 For visual-tower drift localization, set `MM_PARITY_CAPTURE=1` to

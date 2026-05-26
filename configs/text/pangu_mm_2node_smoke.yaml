@@ -1,0 +1,93 @@
+# Pangu Omni v2 — 2-node 16-NPU REAL 30B-A2B multimodal SFT speed smoke
+#
+# Derived from ``pangu_mm_8card.yaml`` for a one-step cross-node speed test.
+# It loads the full Pangu Omni model (vision + audio + language MoE) and uses
+# the same 14-sample toy multimodal SFT corpus. Differences vs the 8-card
+# smoke:
+#
+#   - world_size = 16 via launcher (2 nodes × 8 NPU)
+#   - global_batch_size = 16 so the batch config is valid:
+#       micro_batch_size(1) × dp_size(16) × grad_accum(1)
+#   - output_dir / wandb.name are separated from the single-node smoke
+#
+# Launch (on master .26):
+#
+#   CONFIG=/root/VeOmni/configs/text/pangu_mm_2node_smoke.yaml \
+#   ENTRY=/root/VeOmni/tasks/train_vlm.py \
+#   MODEL_DIR=/mnt/data_3/models/pangu/pangu_omini_30ba2_hf_model \
+#   DATA_DIR=/root/VeOmni/tests/toy_data/pangu_mm_toy \
+#   MASTER_ADDR=192.168.0.26 MASTER_PORT=29743 \
+#     bash /root/forge/forge/scripts/run_veomni_text_2node_smoke.sh
+
+model:
+  model_path: /mnt/data_3/models/pangu/pangu_omini_30ba2_hf_model
+  config_path: /mnt/data_3/models/pangu/pangu_omini_30ba2_hf_model
+  tokenizer_path: /mnt/data_3/models/pangu/pangu_omini_30ba2_hf_model
+  ops_implementation:
+    attn_implementation: sdpa
+    moe_implementation: fused_npu
+    cross_entropy_loss_implementation: eager
+    rms_norm_implementation: eager
+    swiglu_mlp_implementation: eager
+    rotary_pos_emb_implementation: eager
+    load_balancing_loss_implementation: eager
+
+data:
+  train_path: tests/toy_data/pangu_mm_toy
+  data_type: conversation
+  source_name: pangu_mm_sft_v1
+  max_seq_len: 1024
+  train_size: 1000
+  dataloader:
+    num_workers: 0
+  mm_configs:
+    scale_factor: 28
+    image_min_pixels: 784
+    image_max_pixels: 1605632
+    max_ratio: 200
+    sample_rate: 16000
+    use_audio_in_video: false
+
+train:
+  accelerator:
+    ulysses_size: 1
+    ep_size: 8
+    ep_outside: false
+    fsdp_config:
+      fsdp_mode: fsdp2
+      full_shard: true
+      offload: false
+      mixed_precision:
+        enable: true
+    offload_config:
+      enable_activation: false
+  gradient_checkpointing:
+    enable: true
+    enable_reentrant: false
+  global_batch_size: 16
+  micro_batch_size: 1
+  max_steps: 1
+  num_train_epochs: 1
+  bsz_warmup_ratio: 0
+  optimizer:
+    type: adamw
+    lr: 1.0e-6
+    lr_decay_style: constant
+    max_grad_norm: 1.0
+  vit_lr: 1.0e-6
+  freeze_vit: false
+  freeze_audio_tower: false
+  init_device: meta
+  enable_full_determinism: false
+  empty_cache_steps: 500
+  seed: 42
+  checkpoint:
+    output_dir: /tmp/pangu_mm_2node_smoke
+    manager: dcp
+    save_steps: 100
+    save_epochs: 0
+    save_hf_weights: false
+  wandb:
+    enable: false
+    project: pangu_smoke
+    name: pangu_mm_2node_smoke

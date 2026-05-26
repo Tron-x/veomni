@@ -139,7 +139,16 @@ class HuanyuRotaryEmbedding(nn.Module):
         t = torch.arange(self.max_seq_len_cached, device=device, dtype=torch.int64).type_as(self.inv_freq)
         freqs = torch.outer(t, self.inv_freq)
         emb = torch.cat((freqs, freqs), dim=-1)[:, None, None, :]
-        return emb
+        return emb.to(dtype=dtype)
+
+    def ensure_cache(self, seq_len: int, device: torch.device, dtype: torch.dtype) -> None:
+        """Grow the RoPE cache when packed audio exceeds the reference default."""
+        if seq_len <= self.emb.shape[0] and self.emb.device == device and self.emb.dtype == dtype:
+            return
+
+        new_len = max(seq_len, self.emb.shape[0] * 2)
+        self.emb = self._set_cos_sin_cache(seq_len=new_len, device=device, dtype=dtype)
+        self.max_position_embeddings = max(self.max_position_embeddings, new_len)
 
 
 # ---------------------------------------------------------------------------
@@ -357,6 +366,11 @@ class HuanyuAudioEncoder(HuanyuAudioEncoderPreTrainedModel):
         # NB: ``self.rotary_emb.emb`` has shape [max_len, 1, 1, head_dim].
         # The reference indexes by ``len(position_ids)`` (not the values
         # of position_ids) — mirror that exactly.
+        self.rotary_emb.ensure_cache(
+            seq_len=len(position_ids),
+            device=position_ids.device,
+            dtype=self.rotary_emb.emb.dtype,
+        )
         return (
             self.rotary_emb.emb[: len(position_ids)].cos().squeeze(-2),
             self.rotary_emb.emb[: len(position_ids)].sin().squeeze(-2),
