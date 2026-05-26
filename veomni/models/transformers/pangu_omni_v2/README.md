@@ -5,10 +5,12 @@ larger-scale variants such as 70B-A7B that share the same architecture).
 
 ## Status
 
-- **Phase 1**: skeleton stage. Registration wiring + config patches in place;
-  modeling implementation is staged across Week 1 - 4 (see
-  `docs/pangu_veomni_adaptation/PHASE1_DESIGN.md` in the AReaL repo).
-- **Backend path**: v5 patchgen only. Pinned to `transformers >= 5.0.0`.
+- **Modeling path**: text, vision, and audio modules are wired through
+  `OpenPanguOmni` for VLM training, with a text-only `OpenPanguV2ForCausalLM`
+  path available for language-only ablations.
+- **Patchgen path**: `pangu_omni_v2_gpu_patch_gen_config.py` is kept as the
+  future v5 codegen entrypoint; the current adapter uses the handwritten
+  modules in this package.
 - **Training path**: thinker-only. There is no separate talker / TTS in Pangu
   Omni v2; the LM head is trained directly.
 
@@ -16,27 +18,49 @@ larger-scale variants such as 70B-A7B that share the same architecture).
 
 | Component | Pangu Omni v2 | `qwen3_omni_moe` (reference) | Status in this adapter |
 |---|---|---|---|
-| Text MoE | 384 routed + 2 shared experts, MHC (4-stream) | 128 routed, no shared | New (Week 1-2) |
-| Partial RoPE | `qk_rope_dim=32`, `partial_rotary_factor=0.25` | Full RoPE | New (Week 1) |
-| K-norm | Pangu-specific kernel norm operator | Standard RMSNorm | New (Week 1) |
-| Vision merger | GatedMerger | PatchMerger | New (Week 3) |
-| Audio encoder | HuanyuAudioEncoder + fbank-40 (PyTorch or .so) | Whisper-like | New (Week 3) |
+| Text MoE | 384 routed + 2 shared experts, MHC (4-stream) | 128 routed, no shared | Implemented |
+| Partial RoPE | `qk_rope_dim=32`, `partial_rotary_factor=0.25` | Full RoPE | Implemented |
+| K-norm | Pangu-specific kernel norm operator | Standard RMSNorm | Implemented |
+| Vision merger | GatedMerger | PatchMerger | Implemented |
+| Audio encoder | HuanyuAudioEncoder + fbank-40 (PyTorch or .so) | Whisper-like | Implemented |
 | MRoPE | 3-axis position_ids (temporal/H/W) | Same | Reused from upstream HF |
 
-## File layout (planned)
+## File Layout
 
 ```
 pangu_omni_v2/
-├── __init__.py                              # Registry wiring (this PR)
-├── configuration_pangu_omni_v2.py           # Config subclass + model_type patch (this PR)
-├── modeling_pangu_omni_v2.py                # NotImplementedError placeholder (this PR)
-├── pangu_omni_v2_gpu_patch_gen_config.py    # v5 patchgen spec (Week 1-4)
+├── __init__.py                              # Registry wiring + architecture dispatcher
+├── configuration_pangu_omni_v2.py           # Config subclass + model_type patch
+├── modeling_text.py                         # Text MoE backbone (OpenPanguV2Model / CausalLM)
+├── modeling_vl.py                           # Vision tower + vision/text merge
+├── modeling_omni.py                         # Full multimodal wrapper (vision + audio + text)
+├── modeling_huanyu_audio_encoder.py         # Huanyu audio tower
+├── pangu_omni_v2_gpu_patch_gen_config.py    # v5 patchgen entrypoint
 ├── generated/
-│   └── patched_modeling_pangu_omni_v2_gpu.py    # patchgen output (auto-generated, Week 4)
-├── parallel_plan.py                         # EP plan for routed + shared experts (Week 4)
-├── checkpoint_tensor_converter.py           # HF per-expert -> fused gate_up_proj (Week 4)
+│   └── patched_modeling_pangu_omni_v2_gpu.py    # patchgen output (auto-generated)
+├── parallel_plan.py                         # EP plan for routed + shared experts
+├── checkpoint_tensor_converter.py           # HF per-expert -> fused gate_up_proj
 └── README.md                                # This file
 ```
+
+## Portable Usage
+
+Use the production-style templates under `configs/multimodal/pangu_omni_v2/`:
+
+```bash
+torchrun --nnodes=1 --nproc_per_node=8 --master_port=29509 \
+  tasks/train_vlm.py configs/multimodal/pangu_omni_v2/pangu_omni_8card_sft.yaml
+```
+
+Before launching, replace `/path/to/pangu_omni_v2` and
+`/path/to/multimodal_sft_data` in the template with paths that exist in the
+target environment. For 2-node training, use
+`configs/multimodal/pangu_omni_v2/pangu_omni_2node_sft.yaml` and ensure model
+and data paths are identical on every node.
+
+Local smoke/debug configs that contain `/mnt/data_3`, cluster IPs, toy data, or
+short-step limits are intentionally isolated under
+`configs/multimodal/pangu_omni_v2/local_smoke/`.
 
 ## Real 30B-A2B + EP=8 multimodal SFT smoke — GREEN
 
@@ -46,7 +70,7 @@ weights through `VLMTrainer`:
 
 ```bash
 torchrun --nnodes=1 --nproc_per_node=8 --master_port=29509 \
-  tasks/train_vlm.py configs/text/pangu_mm_8card.yaml
+  tasks/train_vlm.py configs/multimodal/pangu_omni_v2/local_smoke/pangu_mm_8card.yaml
 # step 1 (image+audio+text mixed): total_loss 1.46, grad_norm 14.99
 # VRAM 40.77GB / 54.34GB peak per NPU, 64.2 s/step, exit 0
 ```
@@ -100,17 +124,17 @@ torchrun --nnodes=1 --nproc_per_node=8 --master_port=29507 \
 # VRAM 39.36GB / 58.21GB peak per NPU, exit 0
 ```
 
-Setup (already in repo):
+Text-only setup:
 
 - `tests/toy_data/pangu_toy/train.jsonl` (64 samples) — same toy data
   Plan A uses; safe to swap for a real SFT corpus.
-- `/mnt/data_3/models/pangu/pangu_omini_30ba2_text_only_view/` —
+- `/path/to/pangu_text_only_view/` —
   symlinks every file from the real model dir EXCEPT `config.json`,
   which is rewritten with `architectures=["OpenPanguV2ForCausalLM"]`
-  to route through the Week 2 stable text path. Note: the multimodal
+  to route through the text-only path. Note: the multimodal
   MRoPE × `create_causal_mask` gap that previously made this override
-  mandatory was resolved on 2026-05-22 (see the inline rationale in
-  `OpenPanguV2Model.forward` for the 3D ↔ 2D mask reconciliation).
+  mandatory has been resolved (see the inline rationale in
+  `OpenPanguV2Model.forward` for the 3D <-> 2D mask reconciliation).
   This text-only view is still useful because it (a) skips
   loading the ~26B vision/audio towers when training the language
   backbone and (b) keeps the simpler single-axis position-id path.
@@ -132,7 +156,7 @@ What's wired up:
   `npu_fused_moe_forward`, which auto-detects
   `parallel_state.ep_enabled` and runs the EP all-to-all +
   `npu_group_gemm` path.
-- The OpSlot is re-exported from `modeling_pangu_omni_v2.py` so
+- The OpSlot is re-exported from `modeling_text.py` so
   `_bind_veomni_ops` (in `models/auto.py`) finds it via
   `dir(modeling_module)` and binds it from
   `args.model.ops_implementation.moe_implementation`.
@@ -149,7 +173,7 @@ two new pieces:
 
 * `tools/bootstrap_text_only_baseline.py` — generates a small text-only HF
   baseline (4 Chinese prompts, greedy + teacher-force) from the real 30B-A2B
-  weights. Stored at `/tmp/pangu_text_only_oracle/{samples,baseline}.jsonl`
+  weights. Stored at `outputs/pangu_text_only_oracle/{samples,baseline}.jsonl`
   in the OCRBench schema so `oracle_check.py` reads it unchanged.
 * `tools/multi_card_parity_runner.py` — composes `BaseTrainer._setup` /
   `_build_model` / `_build_parallelized_model` (the same path
@@ -191,20 +215,20 @@ To rerun this validation::
 ```bash
 # (one time) bootstrap text-only HF baseline. Takes ~7 min (HF model load).
 python veomni/models/transformers/pangu_omni_v2/tools/bootstrap_text_only_baseline.py \
-    --out-dir /tmp/pangu_text_only_oracle
+    --out-dir outputs/pangu_text_only_oracle
 
 # B-3 — single-card adapter parity (eager MoE)
 python veomni/models/transformers/pangu_omni_v2/tools/oracle_check.py \
     --mode veomni --text-only \
-    --samples /tmp/pangu_text_only_oracle/samples.jsonl \
-    --baseline /tmp/pangu_text_only_oracle/baseline.jsonl \
+    --samples outputs/pangu_text_only_oracle/samples.jsonl \
+    --baseline outputs/pangu_text_only_oracle/baseline.jsonl \
     --n-samples 4
 # expected: PASS 4/4, max-diff 0.000e+00
 
 # A — multi-card production stack parity (fused_npu MoE + FSDP2 + EP=8)
-PARITY_SAMPLES=/tmp/pangu_text_only_oracle/samples.jsonl \
-PARITY_BASELINE=/tmp/pangu_text_only_oracle/baseline.jsonl \
-PARITY_OUT=/tmp/pangu_text_only_oracle/report_8card.json \
+PARITY_SAMPLES=outputs/pangu_text_only_oracle/samples.jsonl \
+PARITY_BASELINE=outputs/pangu_text_only_oracle/baseline.jsonl \
+PARITY_OUT=outputs/pangu_text_only_oracle/report_8card.json \
 PARITY_TOLERANCE=5e-2 \
 torchrun --nnodes=1 --nproc_per_node=8 --master_port=29510 \
     veomni/models/transformers/pangu_omni_v2/tools/multi_card_parity_runner.py \
@@ -229,17 +253,17 @@ Validated 2026-05-22 / 2026-05-23:
   (`model.language_model`) to the EP plan builder, so the routed
   experts under `model.language_model.layers.*.mlp.experts.*` are
   correctly EP-sharded across 8 ranks.
-* The MoE OpSlot is also re-exported from `modeling_openpangu_omni.py`
-  and `modeling_openpangu_vl.py` so `_bind_veomni_ops` discovers it
+* The MoE OpSlot is also re-exported from `modeling_omni.py`
+  and `modeling_vl.py` so `_bind_veomni_ops` discovers it
   when the loaded class is multimodal — same trick already used by
-  `modeling_pangu_omni_v2.py` for the text-only path. Without this
+  `modeling_text.py` for the text-only path. Without this
   re-export, `moe_implementation: fused_npu` would silently leave the
   slot unbound and the eager forward in `OpenPanguV2Experts` would
   index global expert IDs into the locally-EP-sharded `gate_up_proj`
   (`IndexError: index 49 is out of bounds for dimension 0 with size
   48`).
 * `_no_split_modules` on `OpenPanguPreTrainedModel` /
-  `OpenPanguVLModel` (`modeling_openpangu_vl.py`) was pointing at a
+  `OpenPanguVLModel` (`modeling_vl.py`) was pointing at a
   non-existent `OpenPanguVLDecoderLayer` (text) and
   `Qwen2AudioEncoderLayer` (audio — copy/paste from Qwen2.5-Omni
   reference, never actually used in this graph). FSDP2 uses
@@ -275,9 +299,9 @@ all of the above (`oracle_check.py --mode veomni --n-samples 3
 
 | Gate | Command / report | Result | Interpretation |
 |---|---|---|---|
-| 1-NPU full multimodal OCRBench vs HF | `tools/oracle_check.py --mode veomni --n-samples 3 --tolerance-max 1e-3 --tolerance-mean 1e-4` → `/tmp/pangu_fullmm_single_vs_hf_3.json` | **PASS 3/3**, worst `2.074e-05` (`ocrbench_2`) | Single-card adapter path (`OpenPanguOmni`, visual + audio + language + lm_head) matches the HF oracle. |
-| 1-NPU audio oracle vs HF | `tools/oracle_check.py --mode veomni --samples /mnt/data_3/models/pangu_audio_oracle/data/audio_demo.jsonl --baseline /mnt/data_3/models/pangu_audio_oracle/results/audio_hf_outputs.jsonl --n-samples 3` → `/tmp/pangu_audio_single_vs_hf_3.json` | **PASS 3/3**, worst `0.000e+00` | Audio path is bit-identical under the oracle setting (`allow_internal_format=True`). |
-| 8-NPU full multimodal OCRBench vs HF | `multi_card_multimodal_parity_runner.py configs/text/pangu_real_8card_multimodal.yaml` with `PARITY_N_SAMPLES=3`, `PARITY_TOLERANCE=5e-2` → `/tmp/pangu_fullmm_8card_vs_hf_3.json` | **FAIL 2/3**, `ocrbench_0` max `2.294e-01` | Multi-card full multimodal has a sample-dependent logp drift. It is not a visual-tower wiring failure; see localization below. |
+| 1-NPU full multimodal OCRBench vs HF | `tools/oracle_check.py --mode veomni --n-samples 3 --tolerance-max 1e-3 --tolerance-mean 1e-4` -> `outputs/pangu_fullmm_single_vs_hf_3.json` | **PASS 3/3**, worst `2.074e-05` (`ocrbench_2`) | Single-card adapter path (`OpenPanguOmni`, visual + audio + language + lm_head) matches the HF oracle. |
+| 1-NPU audio oracle vs HF | `tools/oracle_check.py --mode veomni --samples /path/to/audio_oracle/data/audio_demo.jsonl --baseline /path/to/audio_oracle/results/audio_hf_outputs.jsonl --n-samples 3` -> `outputs/pangu_audio_single_vs_hf_3.json` | **PASS 3/3**, worst `0.000e+00` | Audio path is bit-identical under the oracle setting (`allow_internal_format=True`). |
+| 8-NPU full multimodal OCRBench vs HF | `multi_card_multimodal_parity_runner.py configs/multimodal/pangu_omni_v2/local_smoke/pangu_real_8card_multimodal.yaml` with `PARITY_N_SAMPLES=3`, `PARITY_TOLERANCE=5e-2` -> `outputs/pangu_fullmm_8card_vs_hf_3.json` | **FAIL 2/3**, `ocrbench_0` max `2.294e-01` | Multi-card full multimodal has a sample-dependent logp drift. It is not a visual-tower wiring failure; see localization below. |
 
 The 2026-05-25 localization for the failing `ocrbench_0` sample:
 
@@ -319,7 +343,7 @@ tower**:
   `audio_tower.proj` output, and the final `audio_tower_out` all
   show `max=0.000e+00 mean=0.000e+00 n_diff=0` on the three Pangu
   audio oracle samples
-  (`/mnt/data_3/models/pangu_audio_oracle/data/audio_demo.jsonl`).
+  (`/path/to/audio_oracle/data/audio_demo.jsonl`).
 
 The remaining inter-sample logp drift against the HF baseline (≤
 2e-4 for high/mid-confidence samples, up to `2.294e-1` for the
@@ -381,7 +405,7 @@ forward with 8-card's fp32-storage + bf16-compute-cast + fp32-cos/sin
 forward — bit-exact verified end-to-end.
 
 The model side declares (lazy import on `ConformerEncoderLayerBlock`
-to keep the audio-encoder module out of `modeling_openpangu_vl.py`'s
+to keep the audio-encoder module out of `modeling_vl.py`'s
 top-level dependency graph):
 
 ```python
@@ -430,14 +454,14 @@ For the audio side, run the runner and single-card capture with
 sample/baseline source. After the audio fix:
 
 ```
-PARITY_SAMPLES=/mnt/data_3/models/pangu_audio_oracle/data/audio_demo.jsonl \
-PARITY_BASELINE=/mnt/data_3/models/pangu_audio_oracle/results/audio_hf_outputs.jsonl \
-PARITY_CAPTURE_DIR=/tmp/pangu_audio_parity/captured \
+PARITY_SAMPLES=/path/to/audio_oracle/data/audio_demo.jsonl \
+PARITY_BASELINE=/path/to/audio_oracle/results/audio_hf_outputs.jsonl \
+PARITY_CAPTURE_DIR=outputs/pangu_audio_parity/captured \
 MM_PARITY_CAPTURE=1 MM_PARITY_AUDIO_CAPTURE=1 \
 torchrun --nproc_per_node=8 ...multi_card_multimodal_parity_runner.py ...
 
 PARITY_SAMPLES=... PARITY_BASELINE=... \
-PARITY_CAPTURE_DIR=/tmp/pangu_audio_parity/captured \
+PARITY_CAPTURE_DIR=outputs/pangu_audio_parity/captured \
 MM_PARITY_AUDIO_CAPTURE=1 \
 python ...single_card_visual_capture.py
 ```
@@ -474,14 +498,14 @@ from kernel choice, not from FSDP / EP sharding or multimodal tower
 wiring.
 
 ```bash
-PARITY_SAMPLES=/mnt/data_3/models/pangu/test_hf_percision.0518.parallel/data/ocrbench.jsonl \
-PARITY_BASELINE=/mnt/data_3/models/pangu/test_hf_percision.0518.parallel/results/ocrbench_hf_outputs.jsonl \
-PARITY_OUT=/tmp/pangu_multimodal_parity/report_8card.json \
+PARITY_SAMPLES=/path/to/oracle/data/ocrbench.jsonl \
+PARITY_BASELINE=/path/to/oracle/results/ocrbench_hf_outputs.jsonl \
+PARITY_OUT=outputs/pangu_multimodal_parity/report_8card.json \
 PARITY_TOLERANCE=5e-2 \
 PARITY_N_SAMPLES=10 \
 torchrun --nnodes=1 --nproc_per_node=8 --master_port=29512 \
     veomni/models/transformers/pangu_omni_v2/tools/multi_card_multimodal_parity_runner.py \
-    configs/text/pangu_real_8card_multimodal.yaml
+    configs/multimodal/pangu_omni_v2/local_smoke/pangu_real_8card_multimodal.yaml
 # 2026-05-25 revalidation: 2/3 PASS at 5e-2 strict on first 3 OCRBench
 # samples; ocrbench_0 fails with max-diff 2.294e-1, while ocrbench_1/2
 # stay around 1e-4. Top-1 token remains correct; the drift is a softmax
@@ -490,7 +514,7 @@ torchrun --nnodes=1 --nproc_per_node=8 --master_port=29512 \
 
 For visual-tower drift localization, set `MM_PARITY_CAPTURE=1` to
 dump `model.visual` output to
-`/tmp/pangu_multimodal_parity/captured/`; the single-card companion
+`outputs/pangu_multimodal_parity/captured/`; the single-card companion
 script lives at
 `veomni/models/transformers/pangu_omni_v2/tools/single_card_visual_capture.py`
 (loads the model on one NPU with `init_device=npu` — no FSDP — and

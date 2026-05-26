@@ -59,12 +59,12 @@ _REF_MOD_CACHE: tuple[Any, ...] | None = None
 
 
 def _ours_module():
-    # Pre-load ``modeling_pangu_omni_v2`` to break the
-    # ``modeling_openpangu_vl ↔ modeling_pangu_omni_v2`` import cycle
+    # Pre-load ``modeling_text`` to break the
+    # ``modeling_vl ↔ modeling_text`` import cycle
     # when this file runs standalone. Detailed reasoning in
     # ``tests/test_pangu_vl_model_parity.py::_ours_module``.
-    from veomni.models.transformers.pangu_omni_v2 import modeling_openpangu_vl as ours
-    from veomni.models.transformers.pangu_omni_v2 import modeling_pangu_omni_v2  # noqa: F401
+    importlib.import_module("veomni.models.transformers.pangu_omni_v2.modeling_text")
+    ours = importlib.import_module("veomni.models.transformers.pangu_omni_v2.modeling_vl")
 
     return ours
 

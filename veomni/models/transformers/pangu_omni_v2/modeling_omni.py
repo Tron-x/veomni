@@ -17,16 +17,16 @@
 This module is the VeOmni-side counterpart of the Pangu reference
 `modeling_pangu_omni.py`. Production 30B-A2B's
 `architectures=["OpenPanguUltraOmniForConditionalGeneration"]` lands here
-(via the dispatcher in `modeling_pangu_omni_v2.py`); image-only inputs
+(via the dispatcher in `modeling_text.py`); image-only inputs
 degrade to the underlying `OpenPanguVLModel.forward` path and audio
 inputs enter through the new `input_features → masked_scatter` branch.
 
-## Week 3.5 scope
+## Scope
 
-Verbatim port of:
+Port of:
 
 - `OpenPanguOmniModel` — extends `OpenPanguVLModel` with `audio_tower`
-  (`HuanyuAudioEncoder`, Week 3.3) + `audio_tower.proj`
+  (`HuanyuAudioEncoder`) + `audio_tower.proj`
   (`Linear(d_model → hidden_size * mhc_num_stream)`). Overrides
   `forward` to add the audio branch (lines 1150-1158 of HF reference)
   and `get_rope_index` to handle the audio token branch (lines 837-845
@@ -39,11 +39,11 @@ Verbatim port of:
   the production checkpoint's flat `audio_tower.*` keys load into our
   nested `model.audio_tower.*` parameters.
 - `compute_omni_rope_index` — extension of `compute_vl_rope_index`
-  (Week 3.4.c) that adds the audio_token_id branch. Position-id
+  that adds the audio_token_id branch. Position-id
   arithmetic for non-`use_audio_in_video` audio: each audio block of
   `place_num` tokens gets a 3D-broadcast arange offset by
   `start_idx`. The `use_audio_in_video=True` branch (audio interleaved
-  with video frames, lines 906-987 of HF reference) is deferred — production
+  with video frames, lines 906-987 of HF reference) is not implemented because production
   30B-A2B has `vision_config.use_audio_in_video=False`, so the
   interleaved path is dead code for our current target. A `NotImplementedError`
   guard makes the gap explicit; future Omni Plus targets that need
@@ -69,14 +69,12 @@ Verbatim port of:
 
 ## NPU-specific code
 
-`HuanyuAudioEncoder` already guards NPU imports in its own module
-(Week 3.3); this module imports the encoder class and instantiates it
+`HuanyuAudioEncoder` already guards NPU imports in its own module;
+this module imports the encoder class and instantiates it
 without further NPU coupling. The audio path is verified to be
 identical on GPU (`attn_implementation="eager"`) and NPU
 (`attn_implementation="sdpa"`) — both kernel choices flow through
-`HuanyuAttention.forward` and are oracle-checked per the Week 3
-drift-investigation protocol (see
-`docs/pangu_veomni_adaptation/WEEK3_DRIFT_INVESTIGATION.md`).
+`HuanyuAttention.forward` and are covered by the parity/debug tools.
 """
 
 from __future__ import annotations
@@ -92,7 +90,7 @@ from .._pangu_common.pangu_moe import (
     veomni_moe_experts_forward,  # noqa: F401 — see comment below
 )
 from .modeling_huanyu_audio_encoder import HuanyuAudioEncoder
-from .modeling_openpangu_vl import (
+from .modeling_vl import (
     OpenPanguPreTrainedModel,
     OpenPanguVLCausalLMOutputWithPast,
     OpenPanguVLModel,
@@ -108,14 +106,14 @@ from .modeling_openpangu_vl import (
 #
 # When the loaded class is ``OpenPanguOmni`` (= visual + audio_tower +
 # language_model), that module is *this file* — not
-# ``modeling_pangu_omni_v2.py`` (which already re-exports the slot for
+# ``modeling_text.py`` (which already re-exports the slot for
 # the text-only ``OpenPanguV2ForCausalLM`` path). Without the re-export
 # below, setting ``moe_implementation: fused_npu`` would silently leave
 # the slot unbound and the eager forward in ``OpenPanguV2Experts`` would
 # run, which is fatal under ``ep_size > 1`` because it indexes global
 # expert IDs into the locally-EP-sharded ``gate_up_proj``
 # (``IndexError: index 49 is out of bounds for dimension 0 with size 48``,
-# observed 2026-05-22 on the first multi-card multimodal smoke).
+# observed in multi-card multimodal smoke testing).
 
 
 # ---------------------------------------------------------------------------
@@ -164,7 +162,7 @@ def compute_omni_rope_index(
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """3D mrope position-id computation with audio support.
 
-    Extension of `compute_vl_rope_index` (Week 3.4.c). Layout:
+    Extension of `compute_vl_rope_index`. Layout:
 
     - Text token: 1D positions (3D-broadcast).
     - Image token: 3D (T, H, W) positions per patch — same as VL path.
@@ -174,7 +172,7 @@ def compute_omni_rope_index(
       ``start_idx``.
 
     The `use_audio_in_video=True` branch (audio interleaved with video
-    frames) is **not** ported in Week 3.5 — production 30B-A2B has
+    frames) is not implemented. Production 30B-A2B has
     `vision_config.use_audio_in_video=False`, so this path is dead code
     for our current target. Calling with `use_audio_in_video=True`
     raises `NotImplementedError` to make the gap explicit.
@@ -196,7 +194,7 @@ def compute_omni_rope_index(
             counts (post-feature-extraction). Required when any audio
             tokens are present.
         audio_merge_size: ``audio_config.audio_merge_size`` (1 or 2).
-        use_audio_in_video: must be `False` for Week 3.5.
+        use_audio_in_video: must be `False`.
 
     Returns:
         position_ids: ``(3, B, S)`` LongTensor.
@@ -207,7 +205,7 @@ def compute_omni_rope_index(
     if use_audio_in_video:
         raise NotImplementedError(
             "compute_omni_rope_index: `use_audio_in_video=True` is not "
-            "supported in Week 3.5 (production 30B-A2B has "
+            "supported (production 30B-A2B has "
             "`vision_config.use_audio_in_video=False`). The interleaved "
             "audio-in-video position-id branch (HF reference lines "
             "906-987) is deferred."
@@ -253,7 +251,7 @@ def compute_omni_rope_index(
                 # Using ``.item()`` keeps every per-branch tensor build on CPU,
                 # matching the reference's effective semantics (the final
                 # ``llm_positions.to(position_ids.device)`` transfers once at
-                # L312); see Week 3.5 audio-oracle Stage 4c traceback.
+                # L312).
                 start_idx = llm_pos_ids_list[-1].max().item() + 1 if len(llm_pos_ids_list) > 0 else 0
                 if src_item[idx] == audio_token_id:
                     if audio_seqlens is None:
@@ -884,8 +882,8 @@ class OpenPanguOmni(OpenPanguPreTrainedModel, GenerationMixin):
         and audio (``self.model.audio_tower``) towers are dense and
         sharded by FSDP2 alone — no extra EP plan needed for them.
 
-        Verified live via ``named_parameters()`` on a meta-init build
-        of the real 30B-A2B config (2026-05-22):
+        Verified via ``named_parameters()`` on a meta-init build of
+        the real 30B-A2B config:
 
             model.language_model.layers.{i}.mlp.experts.gate_up_proj
                 shape (384, 512, 2560)
@@ -995,7 +993,7 @@ class OpenPanguOmni(OpenPanguPreTrainedModel, GenerationMixin):
 
         loss = None
         if labels is not None:
-            # See `modeling_pangu_omni_v2.py:OpenPanguV2ForCausalLM.forward`
+            # See `modeling_text.py:OpenPanguV2ForCausalLM.forward`
             # for the rationale — VeOmni's `LOSS_MAPPING["ForCausalLM"]`
             # wrapper returns a 4-tuple, not a tensor. Mirrors qwen3_moe.
             loss, logits, log_probs, entropy = self.loss_function(

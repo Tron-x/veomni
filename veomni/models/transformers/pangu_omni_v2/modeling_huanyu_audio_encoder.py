@@ -18,11 +18,11 @@ This module is the VeOmni-side counterpart of the audio sub-section
 of the Pangu reference `modeling_pangu_omni.py` (lines 66-620). The
 reference packs the audio encoder + the multimodal `OpenPanGuOmni`
 wrapper into one file; we split them so the audio port is self-
-contained and consumed only by the Week 3.4 multimodal merge layer.
+contained and consumed only by the multimodal merge layer.
 
-## Week 3.3 scope (this file)
+## Scope
 
-Verbatim ports of:
+Ports of:
 
 - ``HuanyuRotaryEmbedding`` — 1D RoPE used by audio attention. Pre-
   builds a cached ``emb`` buffer of shape ``[max_len, 1, 1, head_dim]``
@@ -69,7 +69,7 @@ dependency.
 The vision and audio towers share no code (different RoPE
 parameterisation, different Q/K/V shape conventions, different
 fused-attn calls) and are consumed by independent merge sites in the
-Week 3.4 multimodal model. Keeping them in separate files matches the
+multimodal model. Keeping them in separate files matches the
 reference's split between ``modeling_openpangu_vl.py`` and
 ``modeling_pangu_omni.py`` (audio half).
 """

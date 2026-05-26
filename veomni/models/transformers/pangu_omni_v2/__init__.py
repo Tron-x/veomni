@@ -19,8 +19,7 @@ This module ONLY registers the Pangu adapter with VeOmni's three registries:
   that exposes the canonical `openpangu_omni` model_type to downstream lookups.
 - MODELING_REGISTRY[<canonical model_type>] -> dispatcher that picks the right
   modeling class based on `config.architectures[0]`.
-- MODEL_PROCESSOR_REGISTRY[<HF processor class name>] -> our processor patch
-  (registered as a placeholder in Phase 1; real patches land Week 3).
+- MODEL_PROCESSOR_REGISTRY[<HF processor class name>] -> optional processor patch.
 
 ## On the `qwen2_moe` model_type bug
 
@@ -76,11 +75,9 @@ def register_pangu_omni_v2_modeling(architecture: str):
 
     Architecture strings observed in Pangu Omni v2 (30B-A2B) `config.json`:
     - "OpenPanguUltraOmniForConditionalGeneration" — top-level multimodal
-      (Week 3 placeholder — raises NotImplementedError on instantiation)
     - "OpenPanguVLForConditionalGeneration" — VL-only variant
-      (Week 3 placeholder — raises NotImplementedError on instantiation)
-    - "OpenPanguV2ForCausalLM" — text-only causal LM head (Week 2: REAL)
-    - "OpenPanguV2Model" — text-only backbone (Week 2: REAL)
+    - "OpenPanguV2ForCausalLM" — text-only causal LM head
+    - "OpenPanguV2Model" — text-only backbone
 
     The order of `if`-checks below matters: substring matches like
     `"OpenPanguV2Model" in architecture` would also fire on
@@ -95,19 +92,19 @@ def register_pangu_omni_v2_modeling(architecture: str):
 
     # Import order matters — see "On circular imports" below.
     #
-    # We MUST import ``modeling_pangu_omni_v2`` BEFORE
-    # ``modeling_openpangu_omni``. Going the other way around triggers
-    # this 3-way cycle (observed Week 3.5 + Stage 4c audio oracle):
+    # We MUST import ``modeling_text`` BEFORE
+    # ``modeling_omni``. Going the other way around triggers
+    # this 3-way cycle:
     #
-    #   modeling_openpangu_omni (top-level)
-    #     L92  from .modeling_openpangu_vl import OpenPanguVL
-    #   modeling_openpangu_vl (top-level)
+    #   modeling_omni (top-level)
+    #     L92  from .modeling_vl import OpenPanguVL
+    #   modeling_vl (top-level)
     #     L1368  _OpenPanguV2Model = _get_openpangu_v2_model_cls()
-    #     ──────> from .modeling_pangu_omni_v2 import OpenPanguV2Model
-    #   modeling_pangu_omni_v2 (top-level)
+    #     ──────> from .modeling_text import OpenPanguV2Model
+    #   modeling_text (top-level)
     #     L426  class OpenPanguVLForConditionalGeneration(
     #                _get_open_pangu_vl_class()):   ← class-def-time call
-    #     ──────> from .modeling_openpangu_vl import OpenPanguVL
+    #     ──────> from .modeling_vl import OpenPanguVL
     #              ╰──> vl is partially-loaded (we entered at L1368, the
     #                   class def for OpenPanguVL lives at line ~600 BEFORE
     #                   L1368 in source order but we're already past it
@@ -115,25 +112,25 @@ def register_pangu_omni_v2_modeling(architecture: str):
     #                   defined LATER in the file, so partial module
     #                   doesn't yet have the symbol). ImportError.
     #
-    # By importing ``modeling_pangu_omni_v2`` first, we trigger the
-    # same chain in a way that terminates: v2 starts loading, hits L426,
-    # imports vl, vl hits L1368, imports v2 (which is partial but
+    # By importing ``modeling_text`` first, we trigger the
+    # same chain in a way that terminates: text starts loading, hits L426,
+    # imports vl, vl hits L1368, imports text (which is partial but
     # already past L132 where OpenPanguV2Model is defined — so the
     # import succeeds), vl finishes loading, v2's L426 class def
-    # completes. After that ``modeling_openpangu_omni`` can be loaded
+    # completes. After that ``modeling_omni`` can be loaded
     # cleanly because vl is fully resolved in ``sys.modules``.
     #
     # CRITICAL: we use ``importlib.import_module`` (and not a ``from
-    # .modeling_openpangu_omni import OpenPanguOmni``) for the second
+    # .modeling_omni import OpenPanguOmni``) for the second
     # module on purpose. Ruff's ``I001`` import-sort rule reorders
     # consecutive ``from`` imports inside a function body
-    # alphabetically — and ``modeling_openpangu_omni`` sorts BEFORE
-    # ``modeling_pangu_omni_v2`` (``o`` < ``p``). Every time
+    # alphabetically — and ``modeling_omni`` sorts BEFORE
+    # ``modeling_text`` (``o`` < ``p``). Every time
     # ``make style`` ran it silently put the imports back in the
     # crashing order. ``importlib.import_module`` is not pattern-
     # matched by I001 so it stays put, preserving the required
-    # "v2 first, omni second" runtime ordering.
-    from .modeling_pangu_omni_v2 import (
+    # "text first, omni second" runtime ordering.
+    from .modeling_text import (
         OpenPanguUltraOmniForConditionalGeneration,
         OpenPanguV2ForCausalLM,
         OpenPanguV2Model,
@@ -141,7 +138,7 @@ def register_pangu_omni_v2_modeling(architecture: str):
     )
 
     OpenPanguOmni = importlib.import_module(  # noqa: F811
-        ".modeling_openpangu_omni", package=__package__
+        ".modeling_omni", package=__package__
     ).OpenPanguOmni
 
     # Attach the ckpt converter on each class so VeOmni's
@@ -159,12 +156,12 @@ def register_pangu_omni_v2_modeling(architecture: str):
         model_cls._create_checkpoint_tensor_converter = staticmethod(create_pangu_omni_v2_checkpoint_tensor_converter)
 
     if "OpenPanguUltraOmni" in architecture:
-        # Week 3.5: route the production 30B-A2B architecture string to
-        # the audio-aware `OpenPanguOmni` (vision + audio + text). The
-        # stub `OpenPanguUltraOmniForConditionalGeneration` (which
+        # Route the production 30B-A2B architecture string to the
+        # audio-aware `OpenPanguOmni` (vision + audio + text). The
+        # compatibility alias `OpenPanguUltraOmniForConditionalGeneration` (which
         # inherits `OpenPanguVL` for legacy import stability) is NOT
         # used here — see its docstring + `_get_open_pangu_omni_class`
-        # in `modeling_pangu_omni_v2.py` for why the resolution must be
+        # in `modeling_text.py` for why the resolution must be
         # dispatcher-time rather than class-def-time (3-way circular
         # import otherwise).
         return OpenPanguOmni
@@ -203,14 +200,13 @@ def register_pangu_omni_v2_modeling_qwen2_moe_alias(architecture: str):
 
 
 # ---------------------------------------------------------------------------
-# Processor registration (placeholder)
+# Processor registration.
 # ---------------------------------------------------------------------------
 
 
-# Pangu's processor class is typically named based on the model variant. Phase 1
-# does not yet patch the processor — registration will be enabled in Week 3
-# alongside the audio / image processor work. Leaving this commented out keeps
-# the registry untouched until we have something to register.
+# Pangu's processor class is typically named based on the model variant.
+# Leaving this commented out keeps the registry untouched until a local
+# processor patch is needed.
 #
 # @MODEL_PROCESSOR_REGISTRY.register("OpenPanguOmniProcessor")
 # def register_pangu_omni_v2_processor():

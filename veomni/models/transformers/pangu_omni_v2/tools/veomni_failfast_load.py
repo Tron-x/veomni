@@ -25,8 +25,9 @@ import traceback
 from pathlib import Path
 
 
-# Run from VeOmni root so its package imports resolve cleanly.
-MODEL_DIR = "/mnt/data_3/models/pangu/pangu_omini_30ba2_hf_model"
+MODEL_DIR = os.environ.get("PANGU_MODEL_DIR")
+if MODEL_DIR is None:
+    raise SystemExit("Set PANGU_MODEL_DIR to the Pangu model directory before running this tool.")
 
 
 def _section(title: str) -> None:

@@ -1,6 +1,6 @@
 """Bit-for-bit parity tests for Pangu Omni v2 vision-tower primitives.
 
-These tests pair each `pangu_omni_v2.modeling_openpangu_vl` component
+These tests pair each `pangu_omni_v2.modeling_vl` component
 with its counterpart in the upstream Pangu reference at
 `/mnt/data_3/models/pangu/configs/modeling_openpangu_vl.py`, ensuring
 our verbatim port produces identical numerical output for a fixed
@@ -47,7 +47,7 @@ def _ours_module():
     `install_pangu_reference_torch_npu_mock` is called inside
     `_load_reference_vl_module()` for exactly this reason.
     """
-    from veomni.models.transformers.pangu_omni_v2 import modeling_openpangu_vl as ours
+    from veomni.models.transformers.pangu_omni_v2 import modeling_vl as ours
 
     return ours
 
@@ -63,7 +63,7 @@ def _load_reference_vl_module():
 
     2. Install the torch_npu sys.modules placeholder so the reference's
        unconditional `import torch_npu` at the top of
-       `modeling_openpangu_vl.py` succeeds.
+       `modeling_vl.py` succeeds.
 
     3. Trigger `AutoConfig.from_pretrained(..., trust_remote_code=True)`
        to materialize the reference modules into the trust_remote_code

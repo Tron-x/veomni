@@ -6,7 +6,7 @@ a pre-recorded HuggingFace baseline.
 
 Reference function: `infer.py:run_hf_one` from the Pangu HF inference repo.
 Our oracle baseline lives at:
-  /mnt/data_3/models/pangu/test_hf_percision.0518.parallel/results/ocrbench_hf_outputs.jsonl
+  /path/to/oracle/results/ocrbench_hf_outputs.jsonl
 
 Each line in that file contains:
   sample_id, prompt_text, image_paths, prediction, token_ids, tokens, logps,
@@ -64,10 +64,10 @@ from pathlib import Path
 from typing import Any
 
 
-PANGU_INFER_DIR = Path("/mnt/data_3/models/pangu/test_hf_percision.0518.parallel")
-PANGU_MODEL_DIR = Path("/mnt/data_3/models/pangu/pangu_omini_30ba2_hf_model")
-DEFAULT_BASELINE = PANGU_INFER_DIR / "results" / "ocrbench_hf_outputs.jsonl"
-DEFAULT_SAMPLES = PANGU_INFER_DIR / "data" / "ocrbench.jsonl"
+DEFAULT_DATA_ROOT = Path(os.environ["PANGU_ORACLE_DATA_ROOT"]) if "PANGU_ORACLE_DATA_ROOT" in os.environ else None
+DEFAULT_MODEL_DIR = Path(os.environ["PANGU_MODEL_DIR"]) if "PANGU_MODEL_DIR" in os.environ else None
+DEFAULT_BASELINE = DEFAULT_DATA_ROOT / "results" / "ocrbench_hf_outputs.jsonl" if DEFAULT_DATA_ROOT else None
+DEFAULT_SAMPLES = DEFAULT_DATA_ROOT / "data" / "ocrbench.jsonl" if DEFAULT_DATA_ROOT else None
 
 
 @dataclass
@@ -137,7 +137,7 @@ def _resolve_mm_paths(sample: dict[str, Any], samples_root: Path, key: str) -> l
 
 
 def resolve_image_paths(sample: dict[str, Any], samples_root: Path) -> list[str]:
-    """Match infer.py:resolve_image_paths — relative paths under PANGU_INFER_DIR."""
+    """Resolve image paths relative to the dataset root."""
     return _resolve_mm_paths(sample, samples_root, "image_paths")
 
 
@@ -351,11 +351,17 @@ def compute_per_token_logps(
     import torch
     import torch.nn.functional as F
 
-    samples_root = sample.get("_samples_root", PANGU_INFER_DIR)
-    if not isinstance(samples_root, Path):
-        samples_root = Path(samples_root)
-    image_paths = resolve_image_paths(sample, samples_root) if not text_only else []
-    audio_paths = resolve_audio_paths(sample, samples_root) if not text_only else []
+    if text_only:
+        image_paths = []
+        audio_paths = []
+    else:
+        samples_root = sample.get("_samples_root")
+        if samples_root is None:
+            raise ValueError("sample is missing _samples_root; infer it from --samples before calling this helper")
+        if not isinstance(samples_root, Path):
+            samples_root = Path(samples_root)
+        image_paths = resolve_image_paths(sample, samples_root)
+        audio_paths = resolve_audio_paths(sample, samples_root)
     conversation = build_conversation(
         image_paths,
         sample["prompt_text"],
@@ -500,7 +506,7 @@ def main() -> int:
             "OCRBench baseline — see the docstring of `build_conversation`."
         ),
     )
-    parser.add_argument("--model-dir", type=Path, default=PANGU_MODEL_DIR)
+    parser.add_argument("--model-dir", type=Path, default=DEFAULT_MODEL_DIR)
     parser.add_argument("--samples", type=Path, default=DEFAULT_SAMPLES)
     parser.add_argument("--baseline", type=Path, default=DEFAULT_BASELINE)
     parser.add_argument("--n-samples", type=int, default=3, help="how many samples to check")
@@ -520,6 +526,11 @@ def main() -> int:
     )
     args = parser.parse_args()
 
+    if args.model_dir is None or args.samples is None or args.baseline is None:
+        parser.error(
+            "set --model-dir, --samples, and --baseline explicitly, or set PANGU_MODEL_DIR and PANGU_ORACLE_DATA_ROOT"
+        )
+
     print(f"\n{'=' * 72}")
     print("  Pangu Omni VeOmni adapter — logp oracle check")
     print(f"{'=' * 72}")
@@ -535,14 +546,10 @@ def main() -> int:
     baseline = load_baseline_map(args.baseline)
 
     # Resolve relative media paths (image_paths / audio_paths) against
-    # the directory the samples JSONL lives in. OCRBench's
-    # ``data/ocrbench_images/0.png`` resolves under
-    # ``/mnt/data_3/models/pangu/test_hf_percision.0518.parallel/``;
-    # our audio oracle's ``data/audio_demo_files/1.mp3`` resolves under
-    # ``/mnt/data_3/models/pangu_audio_oracle/``. Stash the inferred
-    # root on each sample so ``compute_per_token_logps`` (which sees
-    # only one sample at a time) can use it without an extra parameter.
-    samples_root = args.samples.parent.parent if args.samples != DEFAULT_SAMPLES else PANGU_INFER_DIR
+    # the dataset root inferred from the samples JSONL. Stash the inferred
+    # root on each sample so ``compute_per_token_logps`` (which sees only
+    # one sample at a time) can use it without an extra parameter.
+    samples_root = args.samples.parent.parent
     for s in samples:
         s["_samples_root"] = samples_root
 

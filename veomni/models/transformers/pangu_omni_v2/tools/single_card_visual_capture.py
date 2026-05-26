@@ -38,19 +38,12 @@ from veomni.models.transformers.pangu_omni_v2.tools.oracle_check import (
 
 
 def main() -> int:
-    model_dir = "/mnt/data_3/models/pangu/pangu_omini_30ba2_hf_model"
-    # Default to the OCRBench (image) corpus; allow override to audio_demo.jsonl
-    # (or any other oracle corpus) via env so the script doubles as the
-    # audio-side capture for multi-card parity bisection.
-    samples_path = os.environ.get(
-        "PARITY_SAMPLES",
-        "/mnt/data_3/models/pangu/test_hf_percision.0518.parallel/data/ocrbench.jsonl",
-    )
-    baseline_path = os.environ.get(
-        "PARITY_BASELINE",
-        "/mnt/data_3/models/pangu/test_hf_percision.0518.parallel/results/ocrbench_hf_outputs.jsonl",
-    )
-    out_dir = Path(os.environ.get("PARITY_CAPTURE_DIR", "/tmp/pangu_multimodal_parity/captured"))
+    model_dir = os.environ.get("PANGU_MODEL_DIR")
+    samples_path = os.environ.get("PARITY_SAMPLES")
+    baseline_path = os.environ.get("PARITY_BASELINE")
+    if not model_dir or not samples_path or not baseline_path:
+        raise SystemExit("Set PANGU_MODEL_DIR, PARITY_SAMPLES, and PARITY_BASELINE before running this tool.")
+    out_dir = Path(os.environ.get("PARITY_CAPTURE_DIR", "outputs/pangu_multimodal_parity/captured"))
     out_dir.mkdir(parents=True, exist_ok=True)
     n_samples = int(os.environ.get("PARITY_N_SAMPLES", "3"))
 

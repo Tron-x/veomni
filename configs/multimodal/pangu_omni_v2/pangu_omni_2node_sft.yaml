@@ -1,16 +1,13 @@
-# Minimal text-only smoke through VLMTrainer + OpenPanguOmni.
+# Pangu Omni v2 — portable 2-node / 16-NPU multimodal SFT template.
 #
-# Goal: confirm a single forward+backward step completes end-to-end on
-# the full 30B-A2B model using the VLM data pipeline (with our
-# `pangu_mm_sft_v1` preprocessor and the `openpangu_omni` data
-# transform). No images / audio — exercises only the language tower
-# under the multimodal entry point. Once this is green, we'll dial
-# vision and audio back on incrementally.
+# Replace /path/to/pangu_omni_v2 and /path/to/multimodal_sft_data for the
+# target environment. Launch with torchrun or the site's distributed launcher,
+# ensuring the same model and data paths exist on every node.
 
 model:
-  model_path: /mnt/data_3/models/pangu/pangu_omini_30ba2_hf_model
-  config_path: /mnt/data_3/models/pangu/pangu_omini_30ba2_hf_model
-  tokenizer_path: /mnt/data_3/models/pangu/pangu_omini_30ba2_hf_model
+  model_path: /path/to/pangu_omni_v2
+  config_path: /path/to/pangu_omni_v2
+  tokenizer_path: /path/to/pangu_omni_v2
   ops_implementation:
     attn_implementation: sdpa
     moe_implementation: fused_npu
@@ -21,11 +18,11 @@ model:
     load_balancing_loss_implementation: eager
 
 data:
-  train_path: tests/toy_data/pangu_mm_toy_text
+  train_path: /path/to/multimodal_sft_data
   data_type: conversation
   source_name: pangu_mm_sft_v1
-  max_seq_len: 256
-  train_size: 100
+  max_seq_len: 1024
+  train_size: 1000
   dataloader:
     num_workers: 0
   mm_configs:
@@ -52,9 +49,9 @@ train:
   gradient_checkpointing:
     enable: true
     enable_reentrant: false
-  global_batch_size: 8
+  global_batch_size: 16
   micro_batch_size: 1
-  max_steps: 2
+  max_steps: 1000
   num_train_epochs: 1
   bsz_warmup_ratio: 0
   optimizer:
@@ -70,10 +67,12 @@ train:
   empty_cache_steps: 500
   seed: 42
   checkpoint:
-    output_dir: /tmp/pangu_mm_textonly_smoke
+    output_dir: outputs/pangu_omni_2node_sft
     manager: dcp
     save_steps: 100
     save_epochs: 0
     save_hf_weights: false
   wandb:
     enable: false
+    project: pangu_omni
+    name: pangu_omni_2node_sft

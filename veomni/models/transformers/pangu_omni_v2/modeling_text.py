@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Pangu Omni v2 modeling — Week 2.
+"""Pangu Omni v2 text backbone.
 
 Verbatim port of the text-only backbone classes from the Pangu reference
 (`modeling_openpangu_v2.py`):
@@ -21,10 +21,10 @@ Verbatim port of the text-only backbone classes from the Pangu reference
 - `OpenPanguV2Model`            — text MoE backbone (37 layers in 30B-A2B)
 - `OpenPanguV2ForCausalLM`      — adds `lm_head` for token-level generation
 
-The multimodal entrypoints (`OpenPanguVLForConditionalGeneration` and
-`OpenPanguUltraOmniForConditionalGeneration`) are still placeholders that
-raise `NotImplementedError` — they land in Week 3 alongside vision /
-audio encoder ports.
+The multimodal architecture names (`OpenPanguVLForConditionalGeneration`
+and `OpenPanguUltraOmniForConditionalGeneration`) are kept here as thin
+dispatcher-compatible symbols, but the actual vision/audio implementations
+live in `modeling_vl.py` and `modeling_omni.py`.
 
 ## Naming policy
 
@@ -423,10 +423,7 @@ class OpenPanguV2ForCausalLM(OpenPanguV2PreTrainedModel, GenerationMixin):
             # here and discard the extra returns (they're used by RL /
             # inspection paths, not by VeOmni's SFT loss path).
             #
-            # Matches qwen3_moe's `modeling_qwen3_moe.py:230-235`. When we
-            # cut the patchgen output (Week 4) this becomes the canonical
-            # OpSlot guard you see in
-            # `qwen3_moe/generated/patched_modeling_qwen3_moe_gpu.py:768-784`.
+            # Matches qwen3_moe's generated OpSlot guard pattern.
             loss, logits, log_probs, entropy = self.loss_function(
                 logits=logits,
                 labels=labels,
@@ -444,52 +441,46 @@ class OpenPanguV2ForCausalLM(OpenPanguV2PreTrainedModel, GenerationMixin):
 
 
 # ---------------------------------------------------------------------------
-# Multimodal entrypoints — Week 3 placeholders
+# Multimodal entrypoint aliases.
 # ---------------------------------------------------------------------------
 
 
 _MULTIMODAL_NOT_IMPLEMENTED_MSG = (
-    "Pangu Omni v2 multimodal entrypoints are pending Week 3 implementation. "
-    "The text backbone (OpenPanguV2Model / OpenPanguV2ForCausalLM) is fully "
-    "implemented in Week 2 — use those for text-only inference. Vision "
-    "(GatedMerger) and audio (HuanyuAudioEncoder + fbank) encoders land "
-    "Week 3. See docs/pangu_veomni_adaptation/PHASE1_DESIGN.md."
+    "Pangu Omni v2 multimodal entrypoints are available through the dispatcher. "
+    "Use OpenPanguV2Model / OpenPanguV2ForCausalLM for text-only inference."
 )
 
 
 def _get_open_pangu_vl_class():
-    """Lazy import of `OpenPanguVL` (Week 3.4.d) from the multimodal
-    modeling module — avoids pulling the vision import graph into the
-    text-only path."""
-    from .modeling_openpangu_vl import OpenPanguVL
+    """Lazy import of `OpenPanguVL` from the multimodal modeling module."""
+    from .modeling_vl import OpenPanguVL
 
     return OpenPanguVL
 
 
 def _get_open_pangu_omni_class():
-    """Lazy import of `OpenPanguOmni` (Week 3.5) — adds the audio tower
-    and audio merge branch on top of `OpenPanguVL`.
+    """Lazy import of `OpenPanguOmni`.
 
     Importantly, this is **only** invoked at dispatcher time
     (``register_pangu_omni_v2_modeling`` in ``__init__.py``), NOT at
-    class-definition time. ``modeling_openpangu_omni`` imports from
-    ``modeling_openpangu_vl`` at module load, so calling this resolver
+    class-definition time. ``modeling_omni`` imports from
+    ``modeling_vl`` at module load, so calling this resolver
     inside a class-def base would introduce a 3-way circular
-    (``modeling_openpangu_vl`` ↔ ``modeling_pangu_omni_v2`` ↔
-    ``modeling_openpangu_omni``). Keeping it dispatcher-time means the
-    dispatcher fires AFTER both ``modeling_openpangu_vl`` and
-    ``modeling_pangu_omni_v2`` have fully loaded.
+    (``modeling_vl`` ↔ ``modeling_text`` ↔
+    ``modeling_omni``). Keeping it dispatcher-time means the
+    dispatcher fires AFTER both ``modeling_vl`` and
+    ``modeling_text`` have fully loaded.
     """
-    from .modeling_openpangu_omni import OpenPanguOmni
+    from .modeling_omni import OpenPanguOmni
 
     return OpenPanguOmni
 
 
 class OpenPanguVLForConditionalGeneration(_get_open_pangu_vl_class()):
-    """Vision + LLM (Pangu VL variant) — Week 3.4.d.
+    """Vision + LLM (Pangu VL variant).
 
     Subclass of `OpenPanguVL` (the multimodal merge model defined in
-    `modeling_openpangu_vl.py`). Carries the verbatim upstream class
+    `modeling_vl.py`). Carries the verbatim upstream class
     name so it matches `config.architectures[0]` when the on-disk
     config marks a VL-only variant; the dispatcher in
     ``__init__.py::register_pangu_omni_v2_modeling`` returns this class
@@ -505,19 +496,19 @@ class OpenPanguVLForConditionalGeneration(_get_open_pangu_vl_class()):
 
 
 class OpenPanguUltraOmniForConditionalGeneration(_get_open_pangu_vl_class()):
-    """Top-level Pangu Omni v2 — Week 3.5 dispatcher stub.
+    """Top-level Pangu Omni v2 compatibility alias.
 
     This class is **only** used when callers explicitly instantiate
     it (``OpenPanguUltraOmniForConditionalGeneration(config)``) or via
     static type hints. Inherits from ``OpenPanguVL`` so the symbol is
     stable for legacy import paths and ``isinstance`` checks against
-    the pre-Week-3.5 layout still work.
+    the previous layout still work.
 
     The **real** dispatcher entry — used by VeOmni's loader to build
     the production 30B-A2B model — is
     ``register_pangu_omni_v2_modeling("OpenPanguUltraOmniForConditionalGeneration")``
-    which now returns ``OpenPanguOmni`` directly (Week 3.5
-    audio-aware). See ``__init__.py::register_pangu_omni_v2_modeling``
+    which now returns ``OpenPanguOmni`` directly. See
+    ``__init__.py::register_pangu_omni_v2_modeling``
     for the routing logic.
 
     Why this indirection: making ``OpenPanguUltraOmniForConditionalGeneration``

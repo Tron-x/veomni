@@ -1,3 +1,4 @@
+# LOCAL SMOKE ONLY: contains local oracle paths and parity-output paths.
 # Pangu Omni v2 — 8-NPU REAL 30B-A2B forward-parity (multimodal)
 #
 # Companion to ``pangu_real_8card.yaml`` (text-only SFT smoke). The
@@ -8,7 +9,7 @@
 #     ['OpenPanguUltraOmniForConditionalGeneration']`` is honored and
 #     we land on ``OpenPanguOmni`` (= visual + audio_tower + language_model).
 #     This is unlocked by the L2b fix (MRoPE × create_causal_mask) on
-#     2026-05-22 — see ``modeling_pangu_omni_v2.py:OpenPanguV2Model.forward``.
+#     2026-05-22 — see ``modeling_text.py:OpenPanguV2Model.forward``.
 #
 #   * The vision tower (``model.visual``) and audio tower
 #     (``model.audio_tower``) are dense and stay under default FSDP2.
@@ -36,7 +37,7 @@
 #   PARITY_N_SAMPLES=3 \
 #   torchrun --nnodes=1 --nproc_per_node=8 --master_port=29512 \
 #       veomni/models/transformers/pangu_omni_v2/tools/multi_card_multimodal_parity_runner.py \
-#       configs/text/pangu_real_8card_multimodal.yaml
+#       configs/multimodal/pangu_omni_v2/local_smoke/pangu_real_8card_multimodal.yaml
 
 model:
   # Real Pangu Omni 30B-A2B with the upstream multimodal architectures

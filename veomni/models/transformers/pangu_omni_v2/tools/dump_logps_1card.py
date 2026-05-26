@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -32,24 +33,26 @@ def main() -> int:
     parser.add_argument(
         "--model-dir",
         type=Path,
-        default=Path("/mnt/data_3/models/pangu/pangu_omini_30ba2_hf_model"),
+        default=Path(os.environ["PANGU_MODEL_DIR"]) if "PANGU_MODEL_DIR" in os.environ else None,
     )
     parser.add_argument(
         "--samples",
         type=Path,
-        default=Path("/tmp/pangu_text_only_oracle/samples.jsonl"),
+        default=Path("outputs/pangu_text_only_oracle/samples.jsonl"),
     )
     parser.add_argument(
         "--baseline",
         type=Path,
-        default=Path("/tmp/pangu_text_only_oracle/baseline.jsonl"),
+        default=Path("outputs/pangu_text_only_oracle/baseline.jsonl"),
     )
     parser.add_argument(
         "--out",
         type=Path,
-        default=Path("/tmp/pangu_text_only_oracle/logps_1card_fusednpu.json"),
+        default=Path("outputs/pangu_text_only_oracle/logps_1card_fusednpu.json"),
     )
     args = parser.parse_args()
+    if args.model_dir is None:
+        parser.error("set --model-dir explicitly, or set PANGU_MODEL_DIR")
 
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from oracle_check import (

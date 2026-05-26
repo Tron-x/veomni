@@ -19,6 +19,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -29,7 +30,6 @@ if str(Path(__file__).resolve().parent) not in sys.path:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from oracle_check import (  # noqa: E402
-    PANGU_MODEL_DIR,
     build_conversation,
     load_hf_model_and_processor,
     load_jsonl,
@@ -43,12 +43,18 @@ def main() -> int:
     parser.add_argument(
         "--samples",
         type=Path,
-        default=Path("/mnt/data_3/models/pangu_audio_oracle/data/audio_demo.jsonl"),
+        default=Path(os.environ["PANGU_AUDIO_SAMPLES"]) if "PANGU_AUDIO_SAMPLES" in os.environ else None,
     )
     parser.add_argument("--sample-id", type=str, default="audio_0")
     parser.add_argument("--max-new-tokens", type=int, default=64)
-    parser.add_argument("--model-dir", type=Path, default=PANGU_MODEL_DIR)
+    parser.add_argument(
+        "--model-dir",
+        type=Path,
+        default=Path(os.environ["PANGU_MODEL_DIR"]) if "PANGU_MODEL_DIR" in os.environ else None,
+    )
     args = parser.parse_args()
+    if args.samples is None or args.model_dir is None:
+        parser.error("set --samples/--model-dir explicitly, or set PANGU_AUDIO_SAMPLES and PANGU_MODEL_DIR")
 
     import torch
     import torch.nn.functional as F

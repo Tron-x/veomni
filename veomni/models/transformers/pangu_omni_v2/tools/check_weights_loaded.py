@@ -20,7 +20,7 @@ Specifically reports:
 Run:
 
     python veomni/models/transformers/pangu_omni_v2/tools/check_weights_loaded.py \\
-        --model-dir /mnt/data_3/models/pangu/pangu_omini_30ba2_text_only_view
+        --model-dir /path/to/pangu_text_only_view
 
 The view dir is the symlink-view created in step-1 of the 8-card SFT
 smoke: real Pangu weights + a ``config.json`` rewritten with
@@ -78,7 +78,7 @@ def main() -> int:
     parser.add_argument(
         "--model-dir",
         type=Path,
-        default=Path("/mnt/data_3/models/pangu/pangu_omini_30ba2_text_only_view"),
+        default=Path(os.environ["PANGU_MODEL_DIR"]) if "PANGU_MODEL_DIR" in os.environ else None,
         help="Directory with config.json + model.safetensors.index.json + per-shard .safetensors",
     )
     parser.add_argument(
@@ -88,6 +88,8 @@ def main() -> int:
         help="Where to materialize the loaded model (cpu = no NPU needed)",
     )
     args = parser.parse_args()
+    if args.model_dir is None:
+        parser.error("set --model-dir explicitly, or set PANGU_MODEL_DIR")
 
     print(f"[*] model_dir = {args.model_dir}")
     print(f"[*] device    = {args.device}")

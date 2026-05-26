@@ -65,23 +65,24 @@ _REF_MOD_CACHE: tuple[Any, ...] | None = None
 
 
 def _ours_module():
-    # Pre-load `modeling_pangu_omni_v2` BEFORE `modeling_openpangu_vl` to
+    # Pre-load `modeling_text` BEFORE `modeling_vl` to
     # avoid a (real) circular import when this test runs in isolation
     # (`pytest tests/test_pangu_vl_model_parity.py`). The cycle is:
     #
-    #   modeling_openpangu_vl  ──(line 1368, _get_openpangu_v2_model_cls)──>
-    #   modeling_pangu_omni_v2 ──(line 426, OpenPanguVLForConditionalGeneration
+    #   modeling_vl  ──(line 1368, _get_openpangu_v2_model_cls)──>
+    #   modeling_text ──(line 426, OpenPanguVLForConditionalGeneration
     #                              base = _get_open_pangu_vl_class())──>
-    #   modeling_openpangu_vl  (still mid-load, OpenPanguVL undefined) ✗
+    #   modeling_vl  (still mid-load, OpenPanguVL undefined) ✗
     #
-    # If `modeling_pangu_omni_v2` is loaded first, `OpenPanguV2Model` is
+    # If `modeling_text` is loaded first, `OpenPanguV2Model` is
     # defined (line 132) by the time `OpenPanguVLForConditionalGeneration`
     # needs `OpenPanguVL`, and the resolution chain unwinds cleanly. In a
     # full pytest session this happens incidentally (alphabetically earlier
     # tests import the omni module first) but standalone runs need an
     # explicit pre-load.
-    from veomni.models.transformers.pangu_omni_v2 import modeling_openpangu_vl as ours
-    from veomni.models.transformers.pangu_omni_v2 import modeling_pangu_omni_v2  # noqa: F401
+    importlib.import_module("veomni.models.transformers.pangu_omni_v2.modeling_text")
+    ours = importlib.import_module("veomni.models.transformers.pangu_omni_v2.modeling_vl")
+    ours.NPU_ATTN_INFR = False
 
     return ours
 
@@ -99,6 +100,7 @@ def _load_reference_vl_module():
     AutoConfig.from_pretrained(str(PANGU_MODEL_DIR), trust_remote_code=True)
     pkg_name = "transformers_modules." + PANGU_MODEL_DIR.name
     ref_mod = importlib.import_module(f"{pkg_name}.modeling_openpangu_vl")
+    ref_mod.NPU_ATTN_INFR = False
 
     # Neutralize the reference's `_parse_preprocess_params` so the
     # reference can be instantiated from a toy config without a real
@@ -259,6 +261,10 @@ def _make_full_config():
     cfg.vision_config._attn_implementation = "eager"
     cfg.text_config._attn_implementation = "eager"
     cfg.audio_config._attn_implementation = "eager"
+    # Transformers v5 standardizes `rope_scaling` into `rope_parameters`
+    # and can drop the reference-only `rope_theta` field from toy configs.
+    # The upstream Pangu reference still reads it from `rope_parameters`.
+    cfg.text_config.rope_parameters["rope_theta"] = cfg.text_config.rope_theta
     return cfg
 
 

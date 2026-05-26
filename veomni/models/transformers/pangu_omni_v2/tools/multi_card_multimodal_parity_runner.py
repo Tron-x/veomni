@@ -22,7 +22,7 @@ Status (2026-05-23): with the four multimodal-multi-card fixes
 (MRoPE × ``create_causal_mask`` reconciliation, multimodal
 ``get_parallel_plan`` with ``model.language_model`` prefix, MoE
 OpSlot re-export on ``OpenPanguOmni`` / ``OpenPanguVL``, and the
-corrected ``_no_split_modules`` in ``modeling_openpangu_vl.py``),
+corrected ``_no_split_modules`` in ``modeling_vl.py``),
 the runner produces the **correct OCR top-1 token** on every
 sample tested (e.g. ``'Centre'``, ``'Friend'``, ``'Chain'`` for
 the three OCRBench prompts). 2/3 PASS at the strict 5e-2 per-token
@@ -35,20 +35,20 @@ multimodal" section for the full audit trail.
 
 Reuses the production setup pipeline (``BaseTrainer._setup`` /
 ``_build_model`` / ``_build_parallelized_model``) so the forward path
-is exactly what ``tasks/train_text.py`` would use, plus the same
+is exactly what ``tasks/train_vlm.py`` would use, plus the same
 multimodal preprocessing that ``tools/oracle_check.py`` uses for HF
 parity.
 
 Launch::
 
-    PARITY_SAMPLES=/mnt/data_3/models/pangu/test_hf_percision.0518.parallel/data/ocrbench.jsonl \\
-    PARITY_BASELINE=/mnt/data_3/models/pangu/test_hf_percision.0518.parallel/results/ocrbench_hf_outputs.jsonl \\
-    PARITY_OUT=/tmp/pangu_multimodal_parity/report_8card.json \\
+    PARITY_SAMPLES=/path/to/oracle/data/ocrbench.jsonl \\
+    PARITY_BASELINE=/path/to/oracle/results/ocrbench_hf_outputs.jsonl \\
+    PARITY_OUT=outputs/pangu_multimodal_parity/report_8card.json \\
     PARITY_TOLERANCE=5e-2 \\
     PARITY_N_SAMPLES=3 \\
     torchrun --nnodes=1 --nproc_per_node=8 --master_port=29512 \\
         veomni/models/transformers/pangu_omni_v2/tools/multi_card_multimodal_parity_runner.py \\
-        configs/text/pangu_real_8card_multimodal.yaml
+        configs/multimodal/pangu_omni_v2/local_smoke/pangu_real_8card_multimodal.yaml
 
 Output (rank 0):
 
@@ -83,7 +83,6 @@ from veomni.arguments import VeOmniArguments, parse_args
 # — relative imports require a parent package on sys.path which torchrun
 # does not provide.
 from veomni.models.transformers.pangu_omni_v2.tools.oracle_check import (
-    PANGU_INFER_DIR,
     build_conversation,
     resolve_audio_paths,
     resolve_image_paths,
@@ -185,12 +184,9 @@ class MultimodalParityRunner:
         samples = self._load_jsonl(samples_path)
         baseline = {row["sample_id"]: row for row in self._load_jsonl(baseline_path)}
 
-        # Resolve relative ``image_paths`` against the baseline's data dir
-        # (that's where ``oracle_check.PANGU_INFER_DIR`` points). Honors
-        # absolute paths unchanged.
+        # Resolve relative media paths against the dataset root inferred
+        # from the samples JSONL. Absolute paths are preserved.
         samples_root = Path(samples_path).parent.parent
-        if not (samples_root / "data").exists():
-            samples_root = PANGU_INFER_DIR
 
         if rank == 0:
             print(f"\n[mm-parity] world_size = {world_size}  device = {device}")
@@ -477,7 +473,7 @@ class MultimodalParityRunner:
                 h.remove()
 
             if rank == 0 and captured:
-                cap_dir = Path(os.environ.get("PARITY_CAPTURE_DIR", "/tmp/pangu_multimodal_parity/captured"))
+                cap_dir = Path(os.environ.get("PARITY_CAPTURE_DIR", "outputs/pangu_multimodal_parity/captured"))
                 cap_dir.mkdir(parents=True, exist_ok=True)
                 fname = cap_dir / f"{sid}_world{world_size}.pt"
                 torch.save(captured, fname)
@@ -584,7 +580,7 @@ class MultimodalParityRunner:
 if __name__ == "__main__":
     samples_path = os.environ.get("PARITY_SAMPLES")
     baseline_path = os.environ.get("PARITY_BASELINE")
-    out_path = os.environ.get("PARITY_OUT", "/tmp/pangu_multimodal_parity_report.json")
+    out_path = os.environ.get("PARITY_OUT", "outputs/pangu_multimodal_parity_report.json")
     tolerance = float(os.environ.get("PARITY_TOLERANCE", "5e-2"))
     n_samples = int(os.environ.get("PARITY_N_SAMPLES", "3"))
     if not samples_path or not baseline_path:

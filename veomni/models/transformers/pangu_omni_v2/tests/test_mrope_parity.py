@@ -60,7 +60,7 @@ _REF_MOD_CACHE: tuple[Any, ...] | None = None
 
 
 def _ours_module():
-    from veomni.models.transformers.pangu_omni_v2 import modeling_openpangu_vl as ours
+    from veomni.models.transformers.pangu_omni_v2 import modeling_vl as ours
 
     return ours
 

@@ -31,19 +31,19 @@ Two responsibilities live here:
    the same `swa_layers -> layer_types` rule that `OpenPanguV2Config`
    uses upstream.
 
-## Backwards-compatibility with Week 2 text-only path
+## Backwards Compatibility With Flat Text Configs
 
-Week 2 verified the text-only path: `OpenPanguV2ForCausalLM` is built
-from a flat `OpenPanguOmniConfig(num_hidden_layers=37, hidden_size=2560,
+The text-only path can build `OpenPanguV2ForCausalLM` from a flat
+`OpenPanguOmniConfig(num_hidden_layers=37, hidden_size=2560,
 ...)` where every text field is a top-level kwarg (no `text_config`
 nesting). We preserve this:
 
-- Week 2 production load (`text_config` absent from `config.json`, all
+- Flat production load (`text_config` absent from `config.json`, all
   text fields top-level): `__init__` snapshots user kwargs into
   `user_text_seed`, builds `self.text_config` from that, and ALSO leaves
   the top-level attributes intact (already set by
   `super().__init__(**kwargs)`).
-- Week 3 multimodal explicit nesting
+- Multimodal explicit nesting
   (`OpenPanguOmniConfig(text_config={...}, vision_config={...},
   audio_config={...})`): `__init__` builds sub-configs from the dicts
   AND mirrors text fields to top-level (reference behavior at
@@ -53,15 +53,15 @@ The two paths are interchangeable — downstream code can read either
 `cfg.hidden_size` (top-level) or `cfg.text_config.hidden_size` (nested)
 and get the same value. This matters because:
 
-- `OpenPanguV2Model.__init__` reads top-level (Week 2 path).
+- `OpenPanguV2Model.__init__` reads top-level fields.
 - Reference multimodal modeling reads `cfg.vision_config.out_hidden_size`
-  / `cfg.text_config.hidden_size` (Week 3 path).
+  / `cfg.text_config.hidden_size`.
 
 ## Why we don't inherit OpenPanguV2Config for text_config
 
 The reference defines `OpenPanguOmniTextConfig(OpenPanguV2Config)`. We
 don't ship a separate `OpenPanguV2Config` class (`OpenPanguOmniConfig`
-played that role flatly in Week 2). Instead, the text sub-config is a
+also supports that flat role). Instead, the text sub-config is a
 peer of `OpenPanguOmniConfig` that holds the same `_derive_layer_types`
 logic; downstream modeling that wants the OpenPanguV2 text backbone gets
 it via `OpenPanguOmniConfig.text_config`.
@@ -87,8 +87,8 @@ def _derive_layer_types_from_swa_layers(cfg: PretrainedConfig) -> None:
     ships SWA layers would have `swa_layers=[2, 5, 8, ...]` and would
     land on `"sliding_attention"` at those indices.
 
-    Extracted as a free function so both `OpenPanguOmniConfig` (Week 2
-    flat path) and `OpenPanguOmniTextConfig` (Week 3 nested path) can
+    Extracted as a free function so both `OpenPanguOmniConfig` (flat
+    path) and `OpenPanguOmniTextConfig` (nested path) can
     use it without duplicating the rule.
     """
     if (
@@ -231,7 +231,7 @@ class OpenPanguOmniTextConfig(PretrainedConfig):
 
 
 class OpenPanguOmniConfigPatch:
-    """Marker base class kept for compatibility with Week 1 imports."""
+    """Marker base class kept for compatibility with existing imports."""
 
 
 class OpenPanguOmniConfig(PretrainedConfig, OpenPanguOmniConfigPatch):
@@ -249,7 +249,7 @@ class OpenPanguOmniConfig(PretrainedConfig, OpenPanguOmniConfigPatch):
 
     - **Top-level mirror of text fields** — `self.hidden_size`,
       `self.num_hidden_layers`, etc. are accessible at top-level too,
-      preserving Week 2's `OpenPanguV2ForCausalLM`-on-flat-config path.
+      preserving the `OpenPanguV2ForCausalLM`-on-flat-config path.
 
     - `layer_types` is derived from `swa_layers` when not explicitly set
       (same as `OpenPanguV2Config` upstream).
@@ -269,16 +269,16 @@ class OpenPanguOmniConfig(PretrainedConfig, OpenPanguOmniConfigPatch):
 
         # Pop sub-configs out of kwargs so the rest can be treated as
         # top-level (text + multimodal-only) fields. Sub-configs may be:
-        # - dict (Week 3 production load from JSON)
+        # - dict (production load from JSON)
         # - PretrainedConfig instance (test construction)
-        # - None (Week 2 flat path; sub-config absent from JSON)
+        # - None (flat path; sub-config absent from JSON)
         vision_cfg = kwargs.pop("vision_config", None)
         audio_cfg = kwargs.pop("audio_config", None)
         text_cfg = kwargs.pop("text_config", None)
 
         # Snapshot the remaining user-provided kwargs BEFORE super().__init__
         # consumes them. This snapshot is the seed for text_config when
-        # the caller didn't supply an explicit one (Week 2 BC path).
+        # the caller didn't supply an explicit one (flat compatibility path).
         user_text_seed = dict(kwargs)
 
         super().__init__(**kwargs)
@@ -288,7 +288,7 @@ class OpenPanguOmniConfig(PretrainedConfig, OpenPanguOmniConfigPatch):
         self.audio_config = self._make_sub(self.sub_configs["audio_config"], audio_cfg)
 
         if text_cfg is None:
-            # Week 2 BC: synthesize text_config from the flat kwargs the
+            # Synthesize text_config from the flat kwargs the
             # user passed. user_text_seed contains exactly what they
             # intended for the text backbone.
             self.text_config = self.sub_configs["text_config"](**user_text_seed)
@@ -315,7 +315,7 @@ class OpenPanguOmniConfig(PretrainedConfig, OpenPanguOmniConfigPatch):
             return cls(**val)
         return val
 
-    # Kept for callers (e.g. Week 2 tests) that explicitly invoked the
+    # Kept for callers that explicitly invoked the
     # helper as a method. Delegates to the free function.
     def _derive_layer_types_from_swa_layers(self) -> None:
         _derive_layer_types_from_swa_layers(self)
@@ -324,10 +324,9 @@ class OpenPanguOmniConfig(PretrainedConfig, OpenPanguOmniConfigPatch):
 def apply_veomni_pangu_omni_v2_patch() -> None:
     """Apply runtime patches needed before model construction.
 
-    PHASE 1 STUB — this is the hook for any monkey-patches on upstream
-    modules (e.g. registering ROPE_INIT_FUNCTIONS for partial RoPE) that
-    must run after `transformers` is imported but before the model class
-    is instantiated. Today it is a no-op.
+    Hook for any runtime monkey-patches that must run after `transformers`
+    is imported but before the model class is instantiated. Today it is a
+    no-op.
     """
     return
 

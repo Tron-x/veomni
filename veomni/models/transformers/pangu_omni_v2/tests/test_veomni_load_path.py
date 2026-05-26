@@ -250,7 +250,7 @@ def test_load_path_preserves_text_only_smoke() -> None:
     config.json defaults to 'OpenPanguUltraOmni...' architecture).
     """
     from veomni.models.loader import MODELING_REGISTRY
-    from veomni.models.transformers.pangu_omni_v2.modeling_pangu_omni_v2 import (
+    from veomni.models.transformers.pangu_omni_v2.modeling_text import (
         OpenPanguV2ForCausalLM,
     )
 

@@ -80,8 +80,7 @@ def _get_pangu_omni_token_ids(processor: "ProcessorMixin") -> tuple[int, int, in
     if missing:
         raise ValueError(
             f"Pangu Omni data transform: tokens {missing!r} not found in tokenizer vocab. "
-            "Expected Pangu Omni v2 tokenizer at "
-            "/mnt/data_3/models/pangu/pangu_omini_30ba2_hf_model (or equivalent)."
+            "Expected a Pangu Omni v2 tokenizer that includes multimodal pad tokens."
         )
     return image_token_id, video_token_id, audio_token_id
 
@@ -225,7 +224,7 @@ def process_sample_openpangu_omni(
         # using ``feature_lens`` cumsums. So the INPUT to audio_tower
         # must be ``(n_mels, T_total)`` — same convention as the
         # ``feature_attention_mask is not None`` branch inside
-        # ``modeling_openpangu_omni.py:get_audio_features``. Qwen2.5-Omni
+        # ``modeling_omni.py:get_audio_features``. Qwen2.5-Omni
         # uses the opposite ``(T_total, n_mels)`` layout (its audio
         # encoder transposes differently), which is why the upstream
         # ``process_sample_qwen_omni`` transform omits this final
@@ -240,7 +239,7 @@ def process_sample_openpangu_omni(
 
     # Replace the raw multimodal token IDs with VeOmni sentinels —
     # ``get_position_id_func`` matches against the sentinels (see
-    # ``modeling_openpangu_omni.py:get_position_id_func``). Sentinels
+    # ``modeling_omni.py:get_position_id_func``). Sentinels
     # are later zeroed out before the forward (the model fills them
     # via ``masked_scatter`` from the encoder outputs).
     input_ids = model_inputs["input_ids"].squeeze(0)

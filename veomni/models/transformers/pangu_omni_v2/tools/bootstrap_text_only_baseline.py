@@ -2,7 +2,7 @@
 
 The existing OCRBench baseline at::
 
-    /mnt/data_3/models/pangu/test_hf_percision.0518.parallel/results/ocrbench_hf_outputs.jsonl
+    /path/to/oracle/results/ocrbench_hf_outputs.jsonl
 
 was generated from MULTIMODAL inputs (image + text) and lands on the
 multimodal model class. It cannot be used to validate the **text-only**
@@ -51,6 +51,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -97,13 +98,13 @@ def main() -> int:
     parser.add_argument(
         "--model-dir",
         type=Path,
-        default=Path("/mnt/data_3/models/pangu/pangu_omini_30ba2_hf_model"),
+        default=Path(os.environ["PANGU_MODEL_DIR"]) if "PANGU_MODEL_DIR" in os.environ else None,
         help="HF model dir (real 30B-A2B; trust_remote_code=True).",
     )
     parser.add_argument(
         "--out-dir",
         type=Path,
-        default=Path("/tmp/pangu_text_only_oracle"),
+        default=Path("outputs/pangu_text_only_oracle"),
     )
     parser.add_argument(
         "--max-new-tokens",
@@ -112,6 +113,8 @@ def main() -> int:
         help="Greedy-decode this many continuation tokens per prompt.",
     )
     args = parser.parse_args()
+    if args.model_dir is None:
+        parser.error("set --model-dir explicitly, or set PANGU_MODEL_DIR")
 
     # Defer torch / HF imports so `--help` is fast.
     import torch

@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Pangu Omni v2 vision tower (and, in Week 3.4, the multimodal merge layer).
+"""Pangu Omni v2 vision tower and multimodal merge layer.
 
 This module is the VeOmni-side counterpart of the Pangu reference
 `modeling_openpangu_vl.py`. The reference file packs both the vision
@@ -21,9 +21,9 @@ encoder (lines 72-617) and the text-side multimodal merge layer
 that downstream patchgen can diff our adapter against upstream
 line-for-line.
 
-## Week 3.2.a scope (this commit)
+## Vision Primitives
 
-Verbatim ports of the vision-tower **primitives**:
+Ports of the vision-tower primitives:
 
 - `PanguEmbeddedRMSNorm` — variance-only RMSNorm with `eps=1e-6` default
   (vision uses 1e-6, distinct from the text backbone's 1e-5).
@@ -36,17 +36,17 @@ Verbatim ports of the vision-tower **primitives**:
   video (multi-frame) inputs. The `if hidden_states.shape[-1] !=
   self.input_size` branch handles the single-frame case by replicating
   to a 2-temporal-patch tensor.
-- `OpenPanguVisionRotaryEmbedding` — 1D RoPE inv_freq buffer; the actual
+- `OpenPanguVisionRotaryEmbedding` — 1D RoPE inv_freq buffer; the
   2D vision RoPE (`cos`/`sin` over the H/W grid) is built in
-  `OpenPanguVisionTransformerPretrainedModel` (Week 3.2.b).
+  `OpenPanguVisionTransformerPretrainedModel`.
 - `OpenPanguVLPatchMerger` — final-stage merger that downsamples by
   `spatial_merge_size**2` and projects to the text-backbone hidden
   size. Optional `use_gatedmerger` adds a SiLU-gated branch (matches
   Pangu 30B-A2B's `vision_config.use_gatedmerger=True`).
 - Helpers: `rotate_half`, `apply_rotary_pos_emb_vision`, `repeat_kv`,
-  `eager_attention_forward` (used by Week 3.2.b's VisionAttention).
+  `eager_attention_forward`.
 
-## Week 3.2.b scope (next commit, NOT in this file yet)
+## Vision Transformer
 
 - `OpenPanguVLVisionAttention` — multi-head self-attention with vision
   RoPE; NPU fast path falls back to `eager_attention_forward` on GPU.
@@ -67,7 +67,7 @@ the runtime detects an Ascend device.
 `_pangu_common/` is for primitives shared across multiple Pangu *model
 variants* (text MoE, VL, Omni). The vision tower is presently consumed
 by exactly one adapter package (`pangu_omni_v2/`), so co-locating
-under `pangu_omni_v2/modeling_openpangu_vl.py` keeps the dispatcher
+under `pangu_omni_v2/modeling_vl.py` keeps the dispatcher
 graph flat. If a second adapter package emerges that also needs the
 vision tower, we'll lift these primitives into
 `_pangu_common/pangu_vision/`.
@@ -79,7 +79,7 @@ from typing import Callable, Optional
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F  # noqa: F401 — used by future blocks (Week 3.2.b)
+import torch.nn.functional as F
 
 
 # NPU is optional; the reference unconditionally imports torch_npu, but
@@ -111,7 +111,7 @@ from .configuration_pangu_omni_v2 import OpenPanguOmniConfig, OpenPanguOmniVisio
 
 # Re-export the MoE-experts OpSlot for ``_bind_veomni_ops`` discovery
 # when the loaded class is ``OpenPanguVL`` — same rationale as
-# ``modeling_openpangu_omni.py`` and ``modeling_pangu_omni_v2.py``. See
+# ``modeling_omni.py`` and ``modeling_text.py``. See
 # the latter's "OpSlot re-export" docstring for the full reasoning.
 # Without this, ``moe_implementation: fused_npu`` would silently leave
 # the slot unbound on the multimodal VL path and the eager forward in
@@ -155,7 +155,7 @@ class PanguEmbeddedRMSNorm(nn.Module):
 class OpenPanguRMSNorm(PanguEmbeddedRMSNorm):
     """Alias kept for symmetry with the reference's two-name convention.
 
-    Reference `modeling_openpangu_vl.py` defines both
+    Reference `modeling_vl.py` defines both
     `PanguEmbeddedRMSNorm` (used inside the ViT) and `OpenPanguRMSNorm`
     (used inside `OpenPanguVLPatchMerger`). They are the same class.
     """
@@ -169,7 +169,7 @@ class OpenPanguRMSNorm(PanguEmbeddedRMSNorm):
 class OpenPanguVLMLP(nn.Module):
     """SwiGLU-style gated MLP used inside `OpenPanguVLVisionBlock`.
 
-    Layout mirrors the reference at line 94 of `modeling_openpangu_vl.py`:
+    Layout mirrors the reference at line 94 of `modeling_vl.py`:
     when `hidden_act == "silu"` we have a 3-projection gated MLP
     (`gate_proj`, `up_proj`, `down_proj`); otherwise we fall back to a
     2-projection MLP (`up_proj` followed by activation, then
@@ -379,7 +379,7 @@ def apply_rotary_pos_emb_vision(
 
 
 # ---------------------------------------------------------------------------
-# Attention helpers (shared with Week 3.2.b VisionAttention block)
+# Attention helpers shared with the vision attention block.
 # ---------------------------------------------------------------------------
 
 
@@ -392,7 +392,7 @@ def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
 
     GQA is not used in the vision tower (`num_kv_groups=1` in
     `OpenPanguVLVisionAttention`), so this helper is effectively a
-    no-op there — but the Week 3.4 multimodal `OpenPanguVLAttention`
+    no-op there, but the multimodal `OpenPanguVLAttention`
     DOES use GQA, sharing this helper.
     """
     batch, num_key_value_heads, slen, head_dim = hidden_states.shape
@@ -435,9 +435,9 @@ def eager_attention_forward(
 
 
 # ===========================================================================
-# Week 3.2.b: Vision attention block + Transformer tower
+# Vision attention block + transformer tower.
 #
-# Verbatim port of `modeling_openpangu_vl.py:257-617`. The NPU
+# Verbatim port of `modeling_vl.py:257-617`. The NPU
 # fast-path inside `OpenPanguVLVisionAttention.forward` (lines 307-329
 # of the reference) calls `torch_npu.npu_fusion_attention`; in our
 # adapter we guard that branch by `NPU_ATTN_INFR` (set False when
@@ -465,7 +465,7 @@ def _init_copy(target: torch.Tensor, source: torch.Tensor) -> None:
 class OpenPanguVLVisionAttention(nn.Module):
     """Vision self-attention with cu_seqlens, RoPE, NPU/eager dispatch.
 
-    Mirrors the reference at line 257-349 of `modeling_openpangu_vl.py`.
+    Mirrors the reference at line 257-349 of `modeling_vl.py`.
 
     - **QKV projection** is a single `nn.Linear(dim, 3*dim, bias=True)`
       that's then `reshape -> permute -> unbind` into three head-axis
@@ -485,7 +485,7 @@ class OpenPanguVLVisionAttention(nn.Module):
       is dead because `NPU_ATTN_INFR=False`.
 
     - **GQA**: `num_key_value_groups=1` (vision tower doesn't use GQA;
-      that's text-side multimodal attention's job in Week 3.4).
+      that's text-side multimodal attention's job).
 
     - **Causal**: `is_causal=False` — vision sees all patches.
     """
@@ -641,7 +641,7 @@ class OpenPanguVLVisionBlock(GradientCheckpointingLayer):
 class OpenPanguPreTrainedModel(PreTrainedModel):
     """Base PreTrainedModel for OpenPanguVL / OpenPanguOmni stacks.
 
-    Reference: `modeling_openpangu_vl.py:382`. Carries the standard
+    Reference: `modeling_vl.py:382`. Carries the standard
     PreTrainedModel knobs (FA2 / SDPA / cache class support) plus a
     custom `_init_weights` that special-cases vision RoPE inv_freq
     buffers — those are non-persistent and need to be re-computed on
@@ -662,7 +662,7 @@ class OpenPanguPreTrainedModel(PreTrainedModel):
     # accidentally lumping the entire 24-layer audio tower into the
     # root FSDP unit. FSDP2 looks up class names at wrap time and
     # silently changes wrap granularity if a listed name doesn't
-    # match any module — observed 2026-05-22 as ~14 logp drift in 8-card
+    # match any module, causing large multi-card logp drift
     # multimodal forward where ``OpenPanguVLDecoderLayer`` match misses
     # caused FSDP2 to wrap at a coarser boundary spanning the visual-feature
     # merge in ``OpenPanguOmniModel.forward``.
@@ -728,9 +728,8 @@ class OpenPanguPreTrainedModel(PreTrainedModel):
           but skip ``cast_forward_inputs`` so the fp32 ``(cos, sin)`` tuple
           survives unchanged across the per-layer boundaries. Result: 8-card
           ``visual_output`` and ``audio_tower_out`` are both bit-exact with
-          single-card. Validated 2026-05-24 on Pangu Omni 30B-A2B with
-          OCRBench (vision) and the Pangu audio oracle samples
-          (``/mnt/data_3/models/pangu_audio_oracle``).
+          single-card on Pangu Omni 30B-A2B vision and audio parity
+          samples.
 
         ``ConformerEncoderLayerBlock`` is imported lazily — importing it at
         module scope would create a circular dependency
@@ -745,7 +744,7 @@ class OpenPanguPreTrainedModel(PreTrainedModel):
 class OpenPanguVisionTransformerPretrainedModel(OpenPanguPreTrainedModel):
     """Pangu Omni v2 vision tower (ViT-style with window attention + merger).
 
-    Verbatim port of `modeling_openpangu_vl.py:400-609`. Key components
+    Verbatim port of `modeling_vl.py:400-609`. Key components
     assembled here:
 
     - **`patch_embed`** — `OpenPanguVLPatchEmbed` (Conv3d). Handles
@@ -1053,7 +1052,7 @@ class OpenPanguVisionTransformerPretrainedModel(OpenPanguPreTrainedModel):
 
 
 # ===========================================================================
-# Week 3.4.a: Multimodal RoPE (3D mrope, the text-side companion to the
+# Multimodal RoPE (3D mrope, the text-side companion to the
 # vision tower's 2D vision RoPE).
 # ===========================================================================
 #
@@ -1318,7 +1317,7 @@ def apply_multimodal_rotary_pos_emb(
 
 
 # ===========================================================================
-# Week 3.4.b: ProjectionSingle + VLTextModel + output dataclasses
+# ProjectionSingle + VLTextModel + output dataclasses.
 # ===========================================================================
 #
 # `ProjectionSingle` is the **vision token → text-embedding** linear
@@ -1339,7 +1338,7 @@ def apply_multimodal_rotary_pos_emb(
 # `OpenPanguV2DecoderLayer.forward` → `OpenPanguV2Attention.forward` →
 # `apply_rotary_pos_emb_qk_partial(...)`. The mrope **blend is baked
 # into `cos`/`sin` inside `OpenPanguVLRotaryEmbedding.forward`** (see
-# Week 3.4.a docstring) — by the time `apply_rotary_pos_emb_qk_partial`
+# Multimodal RoPE docstring) — by the time `apply_rotary_pos_emb_qk_partial`
 # sees them they're already (bsz, seq, head_dim) shaped just like a
 # regular 1D RoPE, so the standard partial-RoPE apply works as-is.
 # That's the multimodal merge trick: 3D mrope masquerading as 1D RoPE
@@ -1352,7 +1351,7 @@ def apply_multimodal_rotary_pos_emb(
 # generation` to keep KV-cache positions in sync across decode steps.
 #
 # NB: We deliberately **do not port** `OpenPanguVLAttention` and
-# `OpenPanguVLDecoderLayer` — Week 3.4.a's parity testing established
+# `OpenPanguVLDecoderLayer` — parity testing established
 # they're dead code in the 30B-A2B inference path. The reference's
 # class hierarchy keeps them around but `OpenPanguVLTextModel` (which
 # inherits `OpenPanguV2Model`) uses `OpenPanguV2DecoderLayer` with
@@ -1427,11 +1426,11 @@ class ProjectionSingle(nn.Module):
 
 
 # Forward-declare to break the circular import: OpenPanguVLTextModel
-# must inherit OpenPanguV2Model, which lives in modeling_pangu_omni_v2;
+# must inherit OpenPanguV2Model, which lives in modeling_text;
 # we lazy-import inside the class definition's parent resolution so a
 # top-level import doesn't cycle when that module imports VL pieces.
 def _get_openpangu_v2_model_cls():
-    from veomni.models.transformers.pangu_omni_v2.modeling_pangu_omni_v2 import (
+    from veomni.models.transformers.pangu_omni_v2.modeling_text import (
         OpenPanguV2Model,
     )
 
@@ -1458,7 +1457,7 @@ class OpenPanguVLTextModel(_OpenPanguV2Model):  # type: ignore[misc,valid-type]
 
 
 # ===========================================================================
-# Week 3.4.c: 3D position id computation for VL multimodal sequences
+# 3D position id computation for VL multimodal sequences.
 # ===========================================================================
 #
 # `compute_vl_rope_index` (the standalone form) and the
@@ -1543,7 +1542,7 @@ def compute_vl_rope_index(
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Standalone form of `OpenPanguVLModel.get_rope_index`.
 
-    See Week 3.4.c docstring above for the 3D mrope scheme. The
+    See the 3D mrope docstring above for the scheme. The
     `OpenPanguVLModel.get_rope_index` method is a thin wrapper that
     reads the config fields and forwards to this helper — keeping the
     bulk of the logic at module scope makes parity testing trivial
@@ -1657,7 +1656,7 @@ def compute_vl_rope_index(
 
 
 # ===========================================================================
-# Week 3.4.d: OpenPanguVLModel (vision+text merge) + OpenPanguVL (top-level CausalLM)
+# OpenPanguVLModel (vision+text merge) + OpenPanguVL (top-level CausalLM).
 # ===========================================================================
 #
 # This is the **merge layer** of the multimodal pipeline: it owns the
@@ -1694,7 +1693,7 @@ def compute_vl_rope_index(
 #
 # * `OpenPanguVL.prepare_inputs_for_generation` — overrides the base
 #   class to suppress pixel_values on non-prefill steps. We skip this
-#   for Week 3.4.d (parity scope is single forward pass). It can be
+#   for single-forward parity scope. It can be
 #   ported later when we wire HF generate() through Forge.
 #
 # What's different vs reference (intentional):
@@ -1702,7 +1701,7 @@ def compute_vl_rope_index(
 # * The reference's `OpenPanguVLModel.get_rope_index` and
 #   `_get_llm_pos_ids_for_vision` are method-form duplications of the
 #   logic we already extracted into module-level `compute_vl_rope_index`
-#   and `_get_llm_pos_ids_for_vision` free functions (Week 3.4.c). The
+#   and `_get_llm_pos_ids_for_vision` free functions. The
 #   method versions here are thin wrappers around those — single source
 #   of truth, no logic duplication.
 # ---------------------------------------------------------------------------
@@ -1720,13 +1719,13 @@ def _get_open_pangu_vl_model_base():
 
 class OpenPanguVLModel(_get_open_pangu_vl_model_base()):
     """Vision + text merge model, used by both inference (`OpenPanguVL`)
-    and downstream wrappers (`OpenPanguOmni` in Week 3.5).
+    and downstream wrappers (`OpenPanguOmni`).
 
     Owns three sub-modules:
 
     - `self.visual` — `OpenPanguVisionTransformerPretrainedModel` (the
-      Week 3.2 ViT). Built from `config.vision_config`.
-    - `self.language_model` — `OpenPanguVLTextModel` (Week 3.4.b). Built
+      vision transformer. Built from `config.vision_config`.
+    - `self.language_model` — `OpenPanguVLTextModel`. Built
       from `config.text_config`.
     - `self.visual.vision_projection` — `ProjectionSingle` attached to
       the vision tower after construction. Output dim depends on MHC:
@@ -2121,7 +2120,7 @@ class OpenPanguVL(OpenPanguPreTrainedModel, GenerationMixin):
 
         loss = None
         if labels is not None:
-            # See `modeling_pangu_omni_v2.py:OpenPanguV2ForCausalLM.forward`
+            # See `modeling_text.py:OpenPanguV2ForCausalLM.forward`
             # for the rationale — VeOmni's `LOSS_MAPPING["ForCausalLM"]`
             # wrapper returns a 4-tuple, not a tensor. Mirrors qwen3_moe.
             loss, logits, log_probs, entropy = self.loss_function(
@@ -2138,7 +2137,7 @@ class OpenPanguVL(OpenPanguPreTrainedModel, GenerationMixin):
         )
 
 
-# Re-export the NPU/GPU dispatch flag so downstream callers (Week 3.4
+# Re-export the NPU/GPU dispatch flag so downstream callers
 # multimodal merge + tests) can branch on it without re-probing.
 __all__ = [
     "PanguEmbeddedRMSNorm",

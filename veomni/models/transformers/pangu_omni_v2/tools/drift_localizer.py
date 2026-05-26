@@ -28,14 +28,15 @@ Requires 2 NPUs with ≥65 GB HBM each.
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 from typing import Any
 
 
-PANGU_INFER_DIR = Path("/mnt/data_3/models/pangu/test_hf_percision.0518.parallel")
-PANGU_MODEL_DIR = Path("/mnt/data_3/models/pangu/pangu_omini_30ba2_hf_model")
-DEFAULT_SAMPLES = PANGU_INFER_DIR / "data" / "ocrbench.jsonl"
-DEFAULT_BASELINE = PANGU_INFER_DIR / "results" / "ocrbench_hf_outputs.jsonl"
+DEFAULT_DATA_ROOT = Path(os.environ["PANGU_ORACLE_DATA_ROOT"]) if "PANGU_ORACLE_DATA_ROOT" in os.environ else None
+DEFAULT_MODEL_DIR = Path(os.environ["PANGU_MODEL_DIR"]) if "PANGU_MODEL_DIR" in os.environ else None
+DEFAULT_SAMPLES = DEFAULT_DATA_ROOT / "data" / "ocrbench.jsonl" if DEFAULT_DATA_ROOT else None
+DEFAULT_BASELINE = DEFAULT_DATA_ROOT / "results" / "ocrbench_hf_outputs.jsonl" if DEFAULT_DATA_ROOT else None
 
 
 def load_jsonl(path: Path) -> list[dict[str, Any]]:
@@ -102,7 +103,7 @@ def load_veomni(model_dir: Path, device: str) -> tuple[Any, Any]:
     return model, processor
 
 
-def prepare_inputs(processor, sample: dict, device: str):
+def prepare_inputs(processor, sample: dict, device: str, samples_root: Path):
     """Replicate oracle_check.py:compute_per_token_logps input prep, but
     return the inputs dict ready to feed through the model."""
     from qwen_omni_utils import process_mm_info
@@ -112,7 +113,7 @@ def prepare_inputs(processor, sample: dict, device: str):
         for p in s.get("image_paths", []):
             path = Path(p)
             if not path.is_absolute():
-                path = PANGU_INFER_DIR / path
+                path = samples_root / path
             out.append(str(path))
         return out
 
@@ -161,7 +162,7 @@ def install_hooks(model, label: str, captured: dict) -> list:
     ``self.model`` = text backbone, ``self.visual`` = vision tower
     top-level, ``self.audio_tower`` = audio top-level, ``self.lm_head``
     top-level). Our adapter's class is ``OpenPanguVL`` (Week 3.4.d port
-    of ``modeling_openpangu_vl.py:OpenPanguVL``, **nested**:
+    of ``modeling_vl.py:OpenPanguVL``, **nested**:
     ``self.model`` = ``OpenPanguVLModel`` which itself has ``.visual``
     + ``.language_model``, plus top-level ``self.lm_head``).
 
@@ -278,8 +279,12 @@ def main() -> int:
     parser.add_argument("--n-samples", type=int, default=1)
     parser.add_argument("--hf-device", type=str, default="npu:0")
     parser.add_argument("--veomni-device", type=str, default="npu:1")
-    parser.add_argument("--model-dir", type=Path, default=PANGU_MODEL_DIR)
+    parser.add_argument("--model-dir", type=Path, default=DEFAULT_MODEL_DIR)
     args = parser.parse_args()
+    if args.model_dir is None or args.samples is None or args.baseline is None:
+        parser.error(
+            "set --model-dir, --samples, and --baseline explicitly, or set PANGU_MODEL_DIR and PANGU_ORACLE_DATA_ROOT"
+        )
 
     print(f"\n{'=' * 72}")
     print("  Pangu Omni VL — per-stage drift localizer")
@@ -293,6 +298,7 @@ def main() -> int:
 
     samples = load_jsonl(args.samples)
     baseline = {str(r["sample_id"]): r for r in load_jsonl(args.baseline)}
+    samples_root = args.samples.parent.parent
     picked = [s for s in samples if str(s["sample_id"]) in baseline][: args.n_samples]
     print(f"  Picked {len(picked)} samples: {[s['sample_id'] for s in picked]}")
     print()
@@ -323,9 +329,9 @@ def main() -> int:
 
             # Prepare inputs separately for each side (different devices)
             print("  preparing inputs (hf side) ...")
-            hf_inputs = prepare_inputs(hf_proc, sample, args.hf_device)
+            hf_inputs = prepare_inputs(hf_proc, sample, args.hf_device, samples_root)
             print("  preparing inputs (veomni side) ...")
-            veomni_inputs = prepare_inputs(veomni_proc, sample, args.veomni_device)
+            veomni_inputs = prepare_inputs(veomni_proc, sample, args.veomni_device, samples_root)
 
             # Confirm input parity at the start — both processors should give
             # identical tokenization

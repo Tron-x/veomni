@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import time
 from pathlib import Path
 
@@ -78,9 +79,16 @@ def main() -> int:
     parser.add_argument(
         "--model-dir",
         type=Path,
-        default=Path("/mnt/data_3/models/pangu/pangu_omini_30ba2_hf_model"),
+        default=Path(os.environ["PANGU_MODEL_DIR"]) if "PANGU_MODEL_DIR" in os.environ else None,
+    )
+    parser.add_argument(
+        "--samples",
+        type=Path,
+        default=Path(os.environ["PANGU_AUDIO_SAMPLES"]) if "PANGU_AUDIO_SAMPLES" in os.environ else None,
     )
     args = parser.parse_args()
+    if args.model_dir is None or args.samples is None:
+        parser.error("set --model-dir/--samples explicitly, or set PANGU_MODEL_DIR and PANGU_AUDIO_SAMPLES")
 
     from oracle_check import (
         load_hf_model_and_processor,
@@ -95,7 +103,7 @@ def main() -> int:
         model, processor = load_veomni_model_and_processor(args.model_dir)
     print(f"[load] done in {time.time() - t0:.1f}s")
 
-    samples_path = Path("/mnt/data_3/models/pangu_audio_oracle/data/audio_demo.jsonl")
+    samples_path = args.samples
     sample = next(
         json.loads(line)
         for line in samples_path.read_text().splitlines()

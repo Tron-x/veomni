@@ -1,3 +1,4 @@
+# LOCAL SMOKE ONLY: contains monarch-cluster paths and short-step limits.
 # Pangu Omni v2 — 8-NPU REAL 30B-A2B multimodal SFT smoke
 #
 # First real-weight multi-card multimodal training run. Goals:
@@ -20,7 +21,7 @@
 #
 # Launch:
 #   torchrun --nnodes=1 --nproc_per_node=8 --master_port=29509 \
-#     tasks/train_vlm.py configs/text/pangu_mm_8card.yaml
+#     tasks/train_vlm.py configs/multimodal/pangu_omni_v2/local_smoke/pangu_mm_8card.yaml
 #
 # Memory budget per NPU (910B2, 64GB HBM), rough estimate:
 #   - Language MoE backbone (~28B bf16): EP-sharded to ~7GB/rank.

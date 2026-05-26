@@ -143,25 +143,25 @@ def test_real_config_dispatcher_routes_to_omni():
     bit-for-bit identical (the audio branch is a no-op when
     ``input_features=None``).
     """
-    # Pre-load ``modeling_pangu_omni_v2`` to unwind the
-    # ``modeling_openpangu_vl ↔ modeling_pangu_omni_v2`` import cycle
+    # Pre-load ``modeling_text`` to unwind the
+    # ``modeling_vl ↔ modeling_text`` import cycle
     # before the dispatcher (which transitively loads
-    # ``modeling_openpangu_omni``) fires. Standalone-run safety; see
+    # ``modeling_omni``) fires. Standalone-run safety; see
     # the same ritual in ``tests/test_pangu_omni_model_parity.py::_ours_modules``.
     from veomni.models.transformers.pangu_omni_v2 import (
-        modeling_pangu_omni_v2,  # noqa: F401 — bootstrap order
+        modeling_text,  # noqa: F401 — bootstrap order
         register_pangu_omni_v2_modeling,
     )
 
     cls = register_pangu_omni_v2_modeling("OpenPanguUltraOmniForConditionalGeneration")
-    from veomni.models.transformers.pangu_omni_v2.modeling_openpangu_omni import (
+    from veomni.models.transformers.pangu_omni_v2.modeling_omni import (
         OpenPanguOmni,
     )
 
     # The dispatcher returns the audio-aware ``OpenPanguOmni`` class
     # **directly** (not the legacy ``OpenPanguUltraOmniForConditionalGeneration``
     # subclass-of-``OpenPanguVL`` stub). See
-    # ``modeling_pangu_omni_v2.OpenPanguUltraOmniForConditionalGeneration``
+    # ``modeling_text.OpenPanguUltraOmniForConditionalGeneration``
     # docstring + ``__init__.register_pangu_omni_v2_modeling`` for the
     # circular-import reasoning behind the indirection.
     assert cls is OpenPanguOmni or issubclass(cls, OpenPanguOmni), (
@@ -198,14 +198,14 @@ def test_real_config_open_pangu_omni_constructs_on_meta_device():
     # Build through the dispatcher rather than instantiating the
     # ``OpenPanguUltraOmniForConditionalGeneration`` stub directly: the
     # stub inherits from ``OpenPanguVL`` (no audio tower) to keep
-    # ``modeling_pangu_omni_v2`` free of the 3-way circular import.
+    # ``modeling_text`` free of the 3-way circular import.
     # Production code paths (``VeOmni.from_pretrained`` /
     # ``build_model``) always go through ``MODELING_REGISTRY`` →
     # ``register_pangu_omni_v2_modeling`` → ``OpenPanguOmni``, so
     # mirroring that here is the right way to exercise the
     # audio-aware class graph.
     from veomni.models.transformers.pangu_omni_v2 import (
-        modeling_pangu_omni_v2,  # noqa: F401 — bootstrap order
+        modeling_text,  # noqa: F401 — bootstrap order
         register_pangu_omni_v2_modeling,
     )
 
@@ -235,7 +235,7 @@ def test_real_config_open_pangu_omni_constructs_on_meta_device():
     from veomni.models.transformers.pangu_omni_v2.modeling_huanyu_audio_encoder import (
         HuanyuAudioEncoder,
     )
-    from veomni.models.transformers.pangu_omni_v2.modeling_openpangu_vl import (
+    from veomni.models.transformers.pangu_omni_v2.modeling_vl import (
         OpenPanguVisionTransformerPretrainedModel,
         OpenPanguVLTextModel,
     )
@@ -263,9 +263,9 @@ def test_real_config_checkpoint_conversion_mapping_includes_audio_tower():
     # Same bootstrap-order ritual; see
     # ``test_real_config_dispatcher_routes_to_omni``.
     from veomni.models.transformers.pangu_omni_v2 import (
-        modeling_pangu_omni_v2,  # noqa: F401 — bootstrap order
+        modeling_text,  # noqa: F401 — bootstrap order
     )
-    from veomni.models.transformers.pangu_omni_v2.modeling_openpangu_omni import (
+    from veomni.models.transformers.pangu_omni_v2.modeling_omni import (
         OpenPanguOmni,
     )
 

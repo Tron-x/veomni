@@ -52,6 +52,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -203,21 +204,26 @@ def main() -> int:
     p.add_argument(
         "--samples",
         type=Path,
-        default=Path("/mnt/data_3/models/pangu_audio_oracle/data/audio_demo.jsonl"),
+        default=Path(os.environ["PANGU_AUDIO_SAMPLES"]) if "PANGU_AUDIO_SAMPLES" in os.environ else None,
     )
     p.add_argument(
         "--baseline",
         type=Path,
-        default=Path("/mnt/data_3/models/pangu_audio_oracle/results/audio_hf_outputs.jsonl"),
+        default=Path(os.environ["PANGU_AUDIO_BASELINE"]) if "PANGU_AUDIO_BASELINE" in os.environ else None,
     )
     p.add_argument("--sample-id", default="audio_2", help="Which sample to dump (default audio_2, the divergent one)")
     p.add_argument("--dump-dir", type=Path, required=True)
     p.add_argument(
         "--model-dir",
         type=Path,
-        default=Path("/mnt/data_3/models/pangu/pangu_omini_30ba2_hf_model"),
+        default=Path(os.environ["PANGU_MODEL_DIR"]) if "PANGU_MODEL_DIR" in os.environ else None,
     )
     args = p.parse_args()
+    if args.samples is None or args.baseline is None or args.model_dir is None:
+        p.error(
+            "set --samples/--baseline/--model-dir explicitly, or set "
+            "PANGU_AUDIO_SAMPLES, PANGU_AUDIO_BASELINE, and PANGU_MODEL_DIR"
+        )
 
     # Import the oracle's loaders so we get the SAME model build path
     # as the actual oracle check, ensuring the dumps are apples-to-apples.

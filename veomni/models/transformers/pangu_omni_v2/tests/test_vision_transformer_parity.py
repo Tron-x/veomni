@@ -33,7 +33,7 @@ _REF_MOD_CACHE: tuple | None = None
 
 def _ours_module():
     """Import our VeOmni-side vision modeling module (lock NPU=False first)."""
-    from veomni.models.transformers.pangu_omni_v2 import modeling_openpangu_vl as ours
+    from veomni.models.transformers.pangu_omni_v2 import modeling_vl as ours
 
     return ours
 

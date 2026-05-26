@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Runtime checkpoint tensor converter for Pangu Omni v2 — Week 2.
+"""Runtime checkpoint tensor converter for Pangu Omni v2.
 
 Converts the Pangu HF safetensors per-expert layout into the in-memory
 fused 3D `OpenPanguV2Experts` layout at load time, mirroring the

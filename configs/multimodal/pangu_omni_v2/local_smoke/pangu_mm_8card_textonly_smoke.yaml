@@ -1,23 +1,12 @@
-# Pangu Omni v2 — 2-node 16-NPU REAL 30B-A2B multimodal SFT speed smoke
+# LOCAL SMOKE ONLY: contains local Pangu model paths and short-step limits.
+# Minimal text-only smoke through VLMTrainer + OpenPanguOmni.
 #
-# Derived from ``pangu_mm_8card.yaml`` for a one-step cross-node speed test.
-# It loads the full Pangu Omni model (vision + audio + language MoE) and uses
-# the same 14-sample toy multimodal SFT corpus. Differences vs the 8-card
-# smoke:
-#
-#   - world_size = 16 via launcher (2 nodes × 8 NPU)
-#   - global_batch_size = 16 so the batch config is valid:
-#       micro_batch_size(1) × dp_size(16) × grad_accum(1)
-#   - output_dir / wandb.name are separated from the single-node smoke
-#
-# Launch (on master .26):
-#
-#   CONFIG=/root/VeOmni/configs/text/pangu_mm_2node_smoke.yaml \
-#   ENTRY=/root/VeOmni/tasks/train_vlm.py \
-#   MODEL_DIR=/mnt/data_3/models/pangu/pangu_omini_30ba2_hf_model \
-#   DATA_DIR=/root/VeOmni/tests/toy_data/pangu_mm_toy \
-#   MASTER_ADDR=192.168.0.26 MASTER_PORT=29743 \
-#     bash /root/forge/forge/scripts/run_veomni_text_2node_smoke.sh
+# Goal: confirm a single forward+backward step completes end-to-end on
+# the full 30B-A2B model using the VLM data pipeline (with our
+# `pangu_mm_sft_v1` preprocessor and the `openpangu_omni` data
+# transform). No images / audio — exercises only the language tower
+# under the multimodal entry point. Once this is green, we'll dial
+# vision and audio back on incrementally.
 
 model:
   model_path: /mnt/data_3/models/pangu/pangu_omini_30ba2_hf_model
@@ -33,11 +22,11 @@ model:
     load_balancing_loss_implementation: eager
 
 data:
-  train_path: tests/toy_data/pangu_mm_toy
+  train_path: tests/toy_data/pangu_mm_toy_text
   data_type: conversation
   source_name: pangu_mm_sft_v1
-  max_seq_len: 1024
-  train_size: 1000
+  max_seq_len: 256
+  train_size: 100
   dataloader:
     num_workers: 0
   mm_configs:
@@ -64,9 +53,9 @@ train:
   gradient_checkpointing:
     enable: true
     enable_reentrant: false
-  global_batch_size: 16
+  global_batch_size: 8
   micro_batch_size: 1
-  max_steps: 1
+  max_steps: 2
   num_train_epochs: 1
   bsz_warmup_ratio: 0
   optimizer:
@@ -82,12 +71,10 @@ train:
   empty_cache_steps: 500
   seed: 42
   checkpoint:
-    output_dir: /tmp/pangu_mm_2node_smoke
+    output_dir: /tmp/pangu_mm_textonly_smoke
     manager: dcp
     save_steps: 100
     save_epochs: 0
     save_hf_weights: false
   wandb:
     enable: false
-    project: pangu_smoke
-    name: pangu_mm_2node_smoke

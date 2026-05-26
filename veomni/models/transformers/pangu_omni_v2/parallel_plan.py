@@ -32,7 +32,7 @@ Routed-expert weights ``experts.gate_up_proj`` ``(E, 2I, H)`` and
 into a wider single MLP — see ``_pangu_common/pangu_moe.py:281-287``)
 and stays replicated across EP ranks under default FSDP2 sharding.
 
-## FQN verification (2026-05-22)
+## FQN Verification
 
 Built ``OpenPanguV2ForCausalLM`` from
 ``tests/toy_config/pangu_omni_v2_toy`` and walked
@@ -67,11 +67,11 @@ fuses them at load time via
 ``checkpoint_tensor_converter.py``, so we land on the qwen3_moe
 2-pattern shape, not the deepseek 3-pattern.
 
-## Multimodal classes — multi-card path enabled 2026-05-22
+## Multimodal Classes
 
 ``OpenPanguOmni`` (audio+vision+text top-level) and
 ``OpenPanguVL`` wrap the V2 text backbone under
-``model.language_model.*`` (verified live via ``named_parameters()``;
+``model.language_model.*`` (verified via ``named_parameters()``;
 expert FQNs land at ``model.language_model.layers.{i}.mlp.experts.*``,
 shape ``(384, 512, 2560)`` for ``gate_up_proj`` on the real 30B-A2B
 checkpoint). They share the same EP layout as the text-only path —

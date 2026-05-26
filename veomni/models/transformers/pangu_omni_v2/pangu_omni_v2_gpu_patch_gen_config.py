@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""v5 patchgen config for Pangu Omni v2 — PHASE 1 PLACEHOLDER.
+"""v5 patchgen config for Pangu Omni v2.
 
 This file declares the patch intent that VeOmni's `patchgen` codegen
 reads to produce `generated/patched_modeling_pangu_omni_v2_gpu.py`.
@@ -22,14 +22,14 @@ Run:
         veomni.models.transformers.pangu_omni_v2.pangu_omni_v2_gpu_patch_gen_config \\
         -o veomni/models/transformers/pangu_omni_v2/generated --diff
 
-PHASE 1 STATUS: empty spec — fully filled in across Week 1-4. See
-`docs/pangu_veomni_adaptation/PHASE1_DESIGN.md` (in the AReaL repo) for
-the detailed implementation order.
+The live adapter currently uses handwritten modeling modules. This file
+is kept as the future codegen entrypoint so generated v5 patches can
+replace the handwritten path without changing the package contract.
 """
 
 from __future__ import annotations
 
-# Placeholder: the real patchgen config will define:
+# Future patchgen config will define:
 # - PatchConfig with source_module pointing to the in-package modeling
 #   (since Pangu is not in transformers mainline, source_module is local)
 # - @config.override_method / @config.replace_class decorators for:
@@ -40,5 +40,4 @@ from __future__ import annotations
 #   * Vision merger -> GatedMerger
 #   * Audio encoder -> HuanyuAudioEncoder
 #
-# For now we intentionally do not call patchgen — generated/ stays empty
-# until Week 1 implementation lands.
+# For now we intentionally do not call patchgen; generated/ stays unchanged.

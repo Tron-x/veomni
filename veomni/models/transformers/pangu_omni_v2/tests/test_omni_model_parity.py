@@ -13,7 +13,7 @@
 # limitations under the License.
 
 """Week 3.5 — parity tests for ``OpenPanguOmni`` (audio-aware multimodal
-merge) at ``veomni/models/transformers/pangu_omni_v2/modeling_openpangu_omni.py``.
+merge) at ``veomni/models/transformers/pangu_omni_v2/modeling_omni.py``.
 
 Coverage:
 
@@ -64,6 +64,7 @@ Toy config sizing (CPU-friendly):
 
 from __future__ import annotations
 
+import importlib
 from pathlib import Path
 
 import pytest
@@ -76,25 +77,26 @@ PANGU_MODEL_DIR = Path("/mnt/data_3/models/pangu/pangu_omini_30ba2_hf_model")
 
 def _ours_modules():
     """Load the VeOmni Pangu Omni v2 modules in the order required to
-    avoid the ``modeling_openpangu_vl ↔ modeling_pangu_omni_v2`` circular
+    avoid the ``modeling_vl ↔ modeling_text`` circular
     import (the dispatcher module must be loaded first; see the
     ``_get_openpangu_v2_model_cls`` lazy-resolver in
-    ``modeling_openpangu_vl.py``)."""
+    ``modeling_vl.py``)."""
     from veomni.models.transformers.pangu_omni_v2 import (
         configuration_pangu_omni_v2,
         modeling_huanyu_audio_encoder,
-        modeling_openpangu_omni,
-        modeling_openpangu_vl,
-        modeling_pangu_omni_v2,  # noqa: F401 — bootstrap order
     )
+
+    importlib.import_module("veomni.models.transformers.pangu_omni_v2.modeling_text")
+    modeling_vl = importlib.import_module("veomni.models.transformers.pangu_omni_v2.modeling_vl")
+    modeling_omni = importlib.import_module("veomni.models.transformers.pangu_omni_v2.modeling_omni")
 
     # Used for the NPU_ATTN_INFR monkey-patch below.
     _ = modeling_huanyu_audio_encoder  # noqa: F841
 
     return (
         configuration_pangu_omni_v2,
-        modeling_openpangu_vl,
-        modeling_openpangu_omni,
+        modeling_vl,
+        modeling_omni,
     )
 
 
@@ -104,7 +106,7 @@ def _force_eager_attention_paths(monkeypatch: pytest.MonkeyPatch) -> None:
 
     Why this is needed (and why only on certain hosts):
 
-    Both ``modeling_openpangu_vl`` (vision attention) and
+    Both ``modeling_vl`` (vision attention) and
     ``modeling_huanyu_audio_encoder`` (audio attention) decide at
     module-load time whether the NPU fused kernel path is available:
 
@@ -140,10 +142,10 @@ def _force_eager_attention_paths(monkeypatch: pytest.MonkeyPatch) -> None:
     """
     from veomni.models.transformers.pangu_omni_v2 import (
         modeling_huanyu_audio_encoder,
-        modeling_openpangu_vl,
+        modeling_vl,
     )
 
-    monkeypatch.setattr(modeling_openpangu_vl, "NPU_ATTN_INFR", False, raising=False)
+    monkeypatch.setattr(modeling_vl, "NPU_ATTN_INFR", False, raising=False)
     monkeypatch.setattr(modeling_huanyu_audio_encoder, "NPU_ATTN_INFR", False, raising=False)
 
 

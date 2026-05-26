@@ -21,19 +21,19 @@ install_pangu_reference_compat_shims()
 def _prime_pangu_omni_v2_modeling() -> None:
     """Force the registry dispatcher to load the modeling modules in the
     correct order **before** any parity test does a direct
-    ``from .pangu_omni_v2 import modeling_openpangu_vl`` style import.
+    ``from .pangu_omni_v2 import modeling_vl`` style import.
 
     Background — there is a 3-way circular import inside the adapter:
 
-    ``modeling_openpangu_vl`` -> ``modeling_pangu_omni_v2`` -> ``modeling_openpangu_vl``
+    ``modeling_vl`` -> ``modeling_text`` -> ``modeling_vl``
 
-    The cycle is broken **only** when ``modeling_pangu_omni_v2`` is loaded
+    The cycle is broken **only** when ``modeling_text`` is loaded
     first, which is exactly what
     ``__init__.py::register_pangu_omni_v2_modeling`` does (see the
     long comment around line 90-122 in ``pangu_omni_v2/__init__.py``).
 
     Parity tests historically bypass the dispatcher and hit
-    ``modeling_openpangu_vl`` directly via ``_ours_module()``, which
+    ``modeling_vl`` directly via ``_ours_module()``, which
     starts the cycle from the wrong end and crashes with
     ``ImportError: cannot import name 'OpenPanguVL' from partially
     initialized module``.

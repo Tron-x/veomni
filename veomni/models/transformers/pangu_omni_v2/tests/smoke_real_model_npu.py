@@ -45,9 +45,9 @@ Multimodal pure-text (--full-multimodal): works as of 2026-05-22
 ----------------------------------------------------------------
 ``OpenPanguOmni.forward`` always emits 3-axis MRoPE ``position_ids``
 (shape ``[3, B, S]``, temporal/H/W) when ``position_ids is None`` — see
-``modeling_openpangu_omni.py:624-680``. The downstream
+``modeling_omni.py:624-680``. The downstream
 ``self.language_model.rotary_emb`` is ``OpenPanguVLRotaryEmbedding``
-which requires exactly 3 dims (``modeling_openpangu_vl.py:1135``), so
+which requires exactly 3 dims (``modeling_vl.py:1135``), so
 the 3D layout must be preserved into rotary_emb.
 
 The conflict point used to be ``OpenPanguV2Model.forward`` calling
@@ -60,7 +60,7 @@ transformers-5 pattern from ``Qwen2_5_VLTextModel.forward``: when
 (non-packed multimodal sequence assumption). Caller-supplied
 ``attention_mask`` short-circuits the position_ids path entirely, so
 packed multimodal training is unaffected. See the inline comment at
-``modeling_pangu_omni_v2.py`` ``OpenPanguV2Model.forward`` for the
+``modeling_text.py`` ``OpenPanguV2Model.forward`` for the
 full rationale.
 
 Run

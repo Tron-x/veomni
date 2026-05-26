@@ -4,7 +4,7 @@ Companion to ``tools/pangu_oracle_check.py``. Given a samples JSONL
 with audio inputs, generate the HuggingFace reference greedy outputs
 and per-token logps and write them to a baseline JSONL with the same
 schema as
-``/mnt/data_3/models/pangu/test_hf_percision.0518.parallel/results/ocrbench_hf_outputs.jsonl``.
+``/path/to/oracle/results/audio_hf_outputs.jsonl``.
 
 Why we need this (and what it is NOT):
 
@@ -61,8 +61,8 @@ the right question for the adapter.
 Usage:
 
   python tools/pangu_audio_baseline_gen.py \\
-      --samples /mnt/data_3/models/pangu_audio_oracle/data/audio_demo.jsonl \\
-      --out     /mnt/data_3/models/pangu_audio_oracle/results/audio_hf_outputs.jsonl \\
+      --samples /path/to/audio_oracle/data/audio_demo.jsonl \\
+      --out     /path/to/audio_oracle/results/audio_hf_outputs.jsonl \\
       --n-samples 3 \\
       --max-new-tokens 64
 """
@@ -71,6 +71,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -83,7 +84,6 @@ if str(Path(__file__).resolve().parent) not in sys.path:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from oracle_check import (  # noqa: E402  (after sys.path)
-    PANGU_MODEL_DIR,
     build_conversation,
     load_hf_model_and_processor,
     load_jsonl,
@@ -238,7 +238,7 @@ def main() -> int:
     parser.add_argument(
         "--model-dir",
         type=Path,
-        default=PANGU_MODEL_DIR,
+        default=Path(os.environ["PANGU_MODEL_DIR"]) if "PANGU_MODEL_DIR" in os.environ else None,
         help="Pangu Omni model directory (config.json + safetensors).",
     )
     parser.add_argument(
@@ -260,6 +260,8 @@ def main() -> int:
         ),
     )
     args = parser.parse_args()
+    if args.model_dir is None:
+        parser.error("set --model-dir explicitly, or set PANGU_MODEL_DIR")
 
     print("[config]")
     print(f"  Samples:        {args.samples}")

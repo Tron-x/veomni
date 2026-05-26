@@ -144,9 +144,9 @@ def _make_toy_config(use_mhc: bool = True):
 def _build_pair(cls_name: str, cfg):
     """Instantiate ours + reference, random-init both with identical state."""
     (ref_mod,) = _load_reference_module()
-    from veomni.models.transformers.pangu_omni_v2 import modeling_pangu_omni_v2
+    from veomni.models.transformers.pangu_omni_v2 import modeling_text
 
-    ours_cls = getattr(modeling_pangu_omni_v2, cls_name)
+    ours_cls = getattr(modeling_text, cls_name)
     ref_cls = getattr(ref_mod, cls_name)
 
     torch.manual_seed(0)
@@ -161,7 +161,7 @@ def _build_pair(cls_name: str, cfg):
     # (vision/audio merging) and skips this branch, masking the bug. Our
     # implementation reads `self.config.mhc_num_stream` directly so it does
     # NOT need this patch, but we patch ref so the parity comparison is on
-    # the same computation path. See modeling_pangu_omni_v2.py docstring
+    # the same computation path. See modeling_text.py docstring
     # "Known upstream quirk".
     if getattr(cfg, "use_mhc", False):
         mhc_n = cfg.mhc_num_stream
@@ -325,7 +325,7 @@ def test_dispatch_to_text_for_causal_lm() -> None:
     """Verify registry dispatch on 'OpenPanguV2ForCausalLM' returns our class."""
     import veomni.models.transformers.pangu_omni_v2  # noqa: F401  # trigger reg
     from veomni.models.loader import MODELING_REGISTRY
-    from veomni.models.transformers.pangu_omni_v2.modeling_pangu_omni_v2 import (
+    from veomni.models.transformers.pangu_omni_v2.modeling_text import (
         OpenPanguV2ForCausalLM,
     )
 
