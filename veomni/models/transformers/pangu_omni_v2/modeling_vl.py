@@ -1123,9 +1123,10 @@ class OpenPanguVLRotaryEmbedding(nn.Module):
 
     def __init__(self, config, device=None):
         super().__init__()
-        if hasattr(config, "rope_scaling") and config.rope_scaling is not None:
-            self.rope_type = config.rope_scaling.get("rope_type", config.rope_scaling.get("type"))
-            self.mrope_interleaved = config.rope_scaling.get("mrope_interleaved", False)
+        rope_config = getattr(config, "rope_scaling", None) or getattr(config, "rope_parameters", None)
+        if rope_config is not None:
+            self.rope_type = rope_config.get("rope_type", rope_config.get("type"))
+            self.mrope_interleaved = rope_config.get("mrope_interleaved", False)
         else:
             self.rope_type = "default"
             self.mrope_interleaved = False
@@ -1148,8 +1149,8 @@ class OpenPanguVLRotaryEmbedding(nn.Module):
         # when mrope_interleaved=True; cheap to compute upfront and
         # avoids re-running the placement algorithm on every forward.
         self.mrope_section = None
-        if hasattr(config, "rope_scaling") and config.rope_scaling is not None:
-            self.mrope_section = config.rope_scaling.get("mrope_section", None)
+        if rope_config is not None:
+            self.mrope_section = rope_config.get("mrope_section", None)
         if self.mrope_interleaved:
             if not self.mrope_section:
                 raise AssertionError("when you use interleave mrope, mrope_section cannot be None.")
@@ -1194,8 +1195,11 @@ class OpenPanguVLRotaryEmbedding(nn.Module):
             base = rope_kwargs["base"]
             dim = rope_kwargs["dim"]
         elif config is not None:
-            base = config.rope_theta
-            partial_rotary_factor = config.partial_rotary_factor if hasattr(config, "partial_rotary_factor") else 1.0
+            rope_params = getattr(config, "rope_parameters", None) or {}
+            base = getattr(config, "rope_theta", rope_params.get("rope_theta", 10000.0))
+            partial_rotary_factor = getattr(
+                config, "partial_rotary_factor", rope_params.get("partial_rotary_factor", 1.0)
+            )
             head_dim = getattr(config, "head_dim", None) or config.hidden_size // config.num_attention_heads
             dim = int(head_dim * partial_rotary_factor)
 

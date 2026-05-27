@@ -104,6 +104,22 @@ def _derive_layer_types_from_swa_layers(cfg: PretrainedConfig) -> None:
         ]
 
 
+def _normalize_rope_fields(cfg: PretrainedConfig) -> None:
+    """Expose Pangu RoPE defaults as flat attributes for legacy modeling code."""
+    rope_params = getattr(cfg, "rope_parameters", None) or {}
+
+    if not hasattr(cfg, "rope_theta"):
+        cfg.rope_theta = rope_params.get("rope_theta", 10000.0)
+
+    if not hasattr(cfg, "partial_rotary_factor"):
+        partial_rotary_factor = rope_params.get("partial_rotary_factor", None)
+        qk_rope_dim = getattr(cfg, "qk_rope_dim", None)
+        head_dim = getattr(cfg, "head_dim", None)
+        if partial_rotary_factor is None and qk_rope_dim is not None and head_dim:
+            partial_rotary_factor = qk_rope_dim / head_dim
+        cfg.partial_rotary_factor = partial_rotary_factor if partial_rotary_factor is not None else 1.0
+
+
 class OpenPanguOmniVisionConfig(PretrainedConfig):
     """Pangu Omni v2 vision-tower config (ViT-style encoder).
 
@@ -230,6 +246,7 @@ class OpenPanguOmniTextConfig(PretrainedConfig):
         kwargs.pop("model_type", None)
         super().__init__(**kwargs)
         self.topk_group = topk_group
+        _normalize_rope_fields(self)
         _derive_layer_types_from_swa_layers(self)
 
 
@@ -311,6 +328,7 @@ class OpenPanguOmniConfig(PretrainedConfig, OpenPanguOmniConfigPatch):
         # OpenPanguV2Config did upstream).
         if not hasattr(self, "topk_group"):
             self.topk_group = self.text_config.topk_group
+        _normalize_rope_fields(self)
         _derive_layer_types_from_swa_layers(self)
 
     @staticmethod

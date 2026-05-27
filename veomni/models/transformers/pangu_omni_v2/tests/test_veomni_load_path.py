@@ -368,6 +368,44 @@ def test_text_config_defaults_topk_group_for_sparse_checkpoint_config() -> None:
     assert explicit_top_level_cfg.topk_group == 3
 
 
+def test_text_config_normalizes_rope_parameters_for_sparse_checkpoint_config() -> None:
+    """Transformers v5 may keep Pangu RoPE fields only in ``rope_parameters``."""
+    from veomni.models.transformers.pangu_omni_v2.configuration_pangu_omni_v2 import (
+        OpenPanguOmniTextConfig,
+    )
+    from veomni.models.transformers.pangu_omni_v2.modeling_vl import (
+        OpenPanguVLRotaryEmbedding,
+    )
+
+    cfg = OpenPanguOmniTextConfig(
+        hidden_size=2560,
+        num_attention_heads=24,
+        head_dim=128,
+        qk_rope_dim=32,
+        max_position_embeddings=32768,
+        rope_parameters={
+            "mrope_interleaved": True,
+            "mrope_section": [6, 5, 5],
+            "rope_theta": 400000,
+            "rope_type": "default",
+            "rotary_mode": "half",
+            "type": "default",
+        },
+    )
+
+    assert cfg.rope_theta == 400000
+    assert cfg.partial_rotary_factor == 0.25
+
+    rotary_emb = OpenPanguVLRotaryEmbedding(cfg)
+    assert rotary_emb.mrope_interleaved is True
+    assert rotary_emb.mrope_section == [6, 5, 5]
+
+    cfg.rope_theta = 10000
+    cfg.partial_rotary_factor = 1.0
+    explicit_rotary_emb = OpenPanguVLRotaryEmbedding(cfg)
+    assert explicit_rotary_emb.inv_freq.shape[0] == 64
+
+
 def main() -> None:
     import traceback as _tb
 
@@ -377,6 +415,7 @@ def main() -> None:
         test_openpangu_v2_omni_model_type_alias,
         test_vision_config_defaults_use_gatedmerger_for_sparse_checkpoint_config,
         test_text_config_defaults_topk_group_for_sparse_checkpoint_config,
+        test_text_config_normalizes_rope_parameters_for_sparse_checkpoint_config,
     ]
     passed = 0
     failed = 0
