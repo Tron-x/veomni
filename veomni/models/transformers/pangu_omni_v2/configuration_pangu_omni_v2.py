@@ -226,9 +226,10 @@ class OpenPanguOmniTextConfig(PretrainedConfig):
     model_type = "openpangu_omni_text"
     base_config_key = "text_config"
 
-    def __init__(self, **kwargs: Any) -> None:
+    def __init__(self, topk_group: int = 1, **kwargs: Any) -> None:
         kwargs.pop("model_type", None)
         super().__init__(**kwargs)
+        self.topk_group = topk_group
         _derive_layer_types_from_swa_layers(self)
 
 
@@ -295,6 +296,8 @@ class OpenPanguOmniConfig(PretrainedConfig, OpenPanguOmniConfigPatch):
             # intended for the text backbone.
             self.text_config = self.sub_configs["text_config"](**user_text_seed)
         else:
+            if isinstance(text_cfg, dict) and "topk_group" not in text_cfg and "topk_group" in user_text_seed:
+                text_cfg = {**text_cfg, "topk_group": user_text_seed["topk_group"]}
             self.text_config = self._make_sub(self.sub_configs["text_config"], text_cfg)
             # If text_config was a dict, ALSO mirror its fields to top-level
             # for downstream code that reads `cfg.hidden_size` flat.
@@ -306,6 +309,8 @@ class OpenPanguOmniConfig(PretrainedConfig, OpenPanguOmniConfigPatch):
 
         # Operates on top-level attributes (mirrors what
         # OpenPanguV2Config did upstream).
+        if not hasattr(self, "topk_group"):
+            self.topk_group = self.text_config.topk_group
         _derive_layer_types_from_swa_layers(self)
 
     @staticmethod

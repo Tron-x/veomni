@@ -326,6 +326,48 @@ def test_vision_config_defaults_use_gatedmerger_for_sparse_checkpoint_config() -
     assert cfg.use_gatedmerger is True
 
 
+def test_text_config_defaults_topk_group_for_sparse_checkpoint_config() -> None:
+    """Sparse Pangu configs may omit ``topk_group`` for MoE routing.
+
+    The Pangu MoE block hardcodes ``n_group=1``, so the matching default
+    ``topk_group=1`` must be present on both nested text config and the
+    top-level mirror used by text-only construction.
+    """
+    from veomni.models.transformers.pangu_omni_v2.configuration_pangu_omni_v2 import (
+        OpenPanguOmniConfig,
+        OpenPanguOmniTextConfig,
+    )
+
+    text_cfg = OpenPanguOmniTextConfig(n_routed_experts=384, num_experts_per_tok=8)
+    assert text_cfg.topk_group == 1
+
+    cfg = OpenPanguOmniConfig(
+        hidden_size=2560,
+        num_hidden_layers=37,
+        text_config={
+            "hidden_size": 2560,
+            "num_hidden_layers": 37,
+            "n_routed_experts": 384,
+            "num_experts_per_tok": 8,
+        },
+    )
+
+    assert cfg.text_config.topk_group == 1
+    assert cfg.topk_group == 1
+
+    explicit_top_level_cfg = OpenPanguOmniConfig(
+        topk_group=3,
+        text_config={
+            "hidden_size": 2560,
+            "num_hidden_layers": 37,
+            "n_routed_experts": 384,
+            "num_experts_per_tok": 8,
+        },
+    )
+    assert explicit_top_level_cfg.text_config.topk_group == 3
+    assert explicit_top_level_cfg.topk_group == 3
+
+
 def main() -> None:
     import traceback as _tb
 
@@ -334,6 +376,7 @@ def main() -> None:
         test_load_path_preserves_text_only_smoke,
         test_openpangu_v2_omni_model_type_alias,
         test_vision_config_defaults_use_gatedmerger_for_sparse_checkpoint_config,
+        test_text_config_defaults_topk_group_for_sparse_checkpoint_config,
     ]
     passed = 0
     failed = 0
