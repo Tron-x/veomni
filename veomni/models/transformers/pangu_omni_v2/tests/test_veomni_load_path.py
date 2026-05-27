@@ -276,12 +276,41 @@ def test_load_path_preserves_text_only_smoke() -> None:
     print("  [PASS] converter attached on all 4 model classes via dispatcher")
 
 
+def test_openpangu_v2_omni_model_type_alias() -> None:
+    """Newer Pangu training snapshots use ``model_type=openpangu_v2_omni``.
+
+    That raw on-disk key must be recognized before config construction so
+    VeOmni can replace the HF config with ``OpenPanguOmniConfig`` and then
+    dispatch to the canonical ``openpangu_omni`` model implementation.
+    """
+    import veomni.models.transformers.pangu_omni_v2  # noqa: F401
+    from veomni.models.loader import MODEL_CONFIG_REGISTRY, MODELING_REGISTRY
+    from veomni.models.transformers.pangu_omni_v2.configuration_pangu_omni_v2 import (
+        OpenPanguOmniConfig,
+    )
+
+    assert "openpangu_v2_omni" in MODEL_CONFIG_REGISTRY.valid_keys()
+    assert MODEL_CONFIG_REGISTRY["openpangu_v2_omni"]() is OpenPanguOmniConfig
+
+    cfg = OpenPanguOmniConfig(model_type="openpangu_v2_omni")
+    assert cfg.model_type == "openpangu_omni"
+
+    assert "openpangu_v2_omni" in MODELING_REGISTRY.valid_keys()
+    cls = MODELING_REGISTRY["openpangu_v2_omni"]("OpenPanguUltraOmniForConditionalGeneration")
+    from veomni.models.transformers.pangu_omni_v2.modeling_omni import (
+        OpenPanguOmni,
+    )
+
+    assert cls is OpenPanguOmni
+
+
 def main() -> None:
     import traceback as _tb
 
     tests = [
         test_load_path_round_trip_via_veomni_helpers,
         test_load_path_preserves_text_only_smoke,
+        test_openpangu_v2_omni_model_type_alias,
     ]
     passed = 0
     failed = 0

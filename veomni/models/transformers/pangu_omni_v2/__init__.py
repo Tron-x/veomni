@@ -21,20 +21,23 @@ This module ONLY registers the Pangu adapter with VeOmni's three registries:
   modeling class based on `config.architectures[0]`.
 - MODEL_PROCESSOR_REGISTRY[<HF processor class name>] -> optional processor patch.
 
-## On the `qwen2_moe` model_type bug
+## On Pangu checkpoint `model_type` variants
 
-The Pangu config.json sets `model_type = "qwen2_moe"`, which is incorrect.
-Two coordination implications:
+Some Pangu config.json files set `model_type = "qwen2_moe"`, which is
+incorrect. Newer training snapshots may instead use
+`model_type = "openpangu_v2_omni"`. Both must route to this adapter.
+Coordination implications:
 
 1. We MUST register `MODEL_CONFIG_REGISTRY["qwen2_moe"]` because VeOmni's
    `get_model_config` looks up the registry by `config.model_type` BEFORE
-   any of our code runs. Our config subclass then rewrites `model_type` to
-   the canonical `openpangu_omni`.
+   any of our code runs. The same applies to the newer
+   `openpangu_v2_omni` spelling. Our config subclass then rewrites
+   `model_type` to the canonical `openpangu_omni`.
 2. Once `model_type` is rewritten, `MODELING_REGISTRY[cfg.model_type]`
    resolves to `MODELING_REGISTRY["openpangu_omni"]` — that's our entry,
    no conflict with future VeOmni Qwen2-MoE support.
-3. Long-term, we should ask the Pangu team to fix `config.json` upstream
-   so the `qwen2_moe` registration is no longer needed.
+3. Long-term, upstream configs should converge on one stable model_type
+   so compatibility aliases can eventually be removed.
 """
 
 from __future__ import annotations
@@ -43,20 +46,19 @@ from ...loader import MODEL_CONFIG_REGISTRY, MODEL_PROCESSOR_REGISTRY, MODELING_
 
 
 # ---------------------------------------------------------------------------
-# Config registration (key = on-disk model_type "qwen2_moe")
+# Config registration (keys = on-disk Pangu model_type variants)
 # ---------------------------------------------------------------------------
 
 
 @MODEL_CONFIG_REGISTRY.register("qwen2_moe")
+@MODEL_CONFIG_REGISTRY.register("openpangu_v2_omni")
 def register_pangu_omni_v2_config():
     """Return the Pangu Omni v2 config subclass.
 
-    NOTE: This entry is currently shared between (a) the buggy Pangu config
-    that mis-labels itself `qwen2_moe`, and (b) any future VeOmni-native
-    Qwen2-MoE support. The config subclass returned here rewrites
-    `model_type` to `openpangu_omni`, isolating downstream lookups. If
-    VeOmni adds a real Qwen2-MoE adapter, this dispatcher will need to
-    branch on `config.architectures[0]`.
+    The config subclass returned here rewrites all supported on-disk Pangu
+    model_type spellings to `openpangu_omni`, isolating downstream lookups.
+    If VeOmni adds a real Qwen2-MoE adapter, this dispatcher will need to
+    branch on `config.architectures[0]` for the `qwen2_moe` compatibility key.
     """
     from .configuration_pangu_omni_v2 import OpenPanguOmniConfig, apply_veomni_pangu_omni_v2_patch
 
@@ -70,6 +72,7 @@ def register_pangu_omni_v2_config():
 
 
 @MODELING_REGISTRY.register("openpangu_omni")
+@MODELING_REGISTRY.register("openpangu_v2_omni")
 def register_pangu_omni_v2_modeling(architecture: str):
     """Dispatch on `architectures[0]` to the right concrete class.
 
