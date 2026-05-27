@@ -69,7 +69,7 @@ it via `OpenPanguOmniConfig.text_config`.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, ClassVar
 
 from transformers import PretrainedConfig
 
@@ -256,12 +256,12 @@ class OpenPanguOmniConfig(PretrainedConfig, OpenPanguOmniConfigPatch):
     """
 
     model_type = _CANONICAL_MODEL_TYPE
-    sub_configs: dict[str, Any] = {
+    sub_configs: ClassVar[dict[str, Any]] = {
         "vision_config": OpenPanguOmniVisionConfig,
         "text_config": OpenPanguOmniTextConfig,
         "audio_config": OpenPanguOmniAudioConfig,
     }
-    keys_to_ignore_at_inference: list[str] = ["past_key_values"]
+    keys_to_ignore_at_inference: ClassVar[list[str]] = ["past_key_values"]
 
     def __init__(self, **kwargs: Any) -> None:
         # Strip the buggy model_type from disk so the parent doesn't see it.
