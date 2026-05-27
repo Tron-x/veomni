@@ -304,6 +304,28 @@ def test_openpangu_v2_omni_model_type_alias() -> None:
     assert cls is OpenPanguOmni
 
 
+def test_vision_config_defaults_use_gatedmerger_for_sparse_checkpoint_config() -> None:
+    """Newer training snapshots may omit ``vision_config.use_gatedmerger``.
+
+    Pangu 30B-A2B uses the gated merger path by default, so sparse
+    checkpoint configs must still instantiate the vision tower config with
+    that attribute populated.
+    """
+    from veomni.models.transformers.pangu_omni_v2.configuration_pangu_omni_v2 import (
+        OpenPanguOmniVisionConfig,
+    )
+
+    cfg = OpenPanguOmniVisionConfig(
+        depth=32,
+        hidden_size=3584,
+        intermediate_size=3420,
+        num_heads=16,
+        out_hidden_size=3584,
+    )
+
+    assert cfg.use_gatedmerger is True
+
+
 def main() -> None:
     import traceback as _tb
 
@@ -311,6 +333,7 @@ def main() -> None:
         test_load_path_round_trip_via_veomni_helpers,
         test_load_path_preserves_text_only_smoke,
         test_openpangu_v2_omni_model_type_alias,
+        test_vision_config_defaults_use_gatedmerger_for_sparse_checkpoint_config,
     ]
     passed = 0
     failed = 0

@@ -127,10 +127,10 @@ class OpenPanguOmniVisionConfig(PretrainedConfig):
        declarations our config is a faithful round-trip of the upstream
        schema.
 
-    Optional fields not in upstream (``use_gatedmerger``, ``output_dim``,
-    ``rms_norm_eps``, ``mm_unit_vision_select_layer``, etc.) are
-    accepted via ``**kwargs`` and stashed on ``self`` by the base class
-    so the vision tower's ``getattr(config, ...)`` calls work.
+    Optional fields not in upstream (``output_dim``, ``rms_norm_eps``,
+    ``mm_unit_vision_select_layer``, etc.) are accepted via ``**kwargs``
+    and stashed on ``self`` by the base class so the vision tower's
+    ``getattr(config, ...)`` calls work.
     """
 
     model_type = "openpangu_omni_vision"
@@ -152,6 +152,7 @@ class OpenPanguOmniVisionConfig(PretrainedConfig):
         out_hidden_size: int = 3584,
         fullatt_block_indexes: list | None = None,
         initializer_range: float = 0.02,
+        use_gatedmerger: bool = True,
         **kwargs: Any,
     ) -> None:
         kwargs.pop("model_type", None)
@@ -170,6 +171,7 @@ class OpenPanguOmniVisionConfig(PretrainedConfig):
         self.fullatt_block_indexes = fullatt_block_indexes if fullatt_block_indexes is not None else [7, 15, 23, 31]
         self.out_hidden_size = out_hidden_size
         self.initializer_range = initializer_range
+        self.use_gatedmerger = use_gatedmerger
 
 
 class OpenPanguOmniAudioConfig(PretrainedConfig):
